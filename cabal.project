@@ -1,0 +1,3 @@
+packages:
+  ./server/hs-grpc-server.cabal
+  ./example/hs-grpc-example.cabal

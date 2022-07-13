@@ -1,7 +1,7 @@
 cabal-version:      2.4
-name:               hs-grpc
+name:               hs-grpc-server
 version:            0.1.0.0
-synopsis:           gRPC in Haskell
+synopsis:           gRPC Server in Haskell
 description:
   Please see the README on Github at <https://github.com/4eUeP/hs-grpc#readme>
 
@@ -14,14 +14,24 @@ tested-with:        GHC ==8.10.7
 category:           Network
 homepage:           https://github.com/4eUeP/hs-grpc
 bug-reports:        https://github.com/4eUeP/hs-grpc/issues
-build-type:         Simple
+build-type:         Custom
 extra-source-files:
   ChangeLog.md
+  include/*.h
   README.md
+
+custom-setup
+  setup-depends:
+    , base   >=4.5 && <5
+    , Cabal  >=2.4 && <4
 
 source-repository head
   type:     git
   location: https://github.com/4eUeP/hs-grpc
+
+flag UseProtoSuite
+  default:     False
+  description: Use proto3-suite as encoding & decoding
 
 common common-lang
   default-language:   Haskell2010
@@ -43,20 +53,53 @@ common common-lang
     -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
 
 library
-  import:          common-lang
-  hs-source-dirs:  src
-  exposed-modules: Lib
-  build-depends:   base >=4.11 && <5
+  import:             common-lang
+  hs-source-dirs:     .
+  cxx-sources:
+    cbits/hs_asio_grpc.cpp
+    cbits/hs_grpc.cpp
 
-executable hs-grpc
-  import:           common-lang
-  hs-source-dirs:   app
-  main-is:          Main.hs
-  build-depends:    base >=4.11 && <5
-  default-language: Haskell2010
-  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+  exposed-modules:
+    HsGrpc.Server
+    HsGrpc.Server.Types
 
-test-suite hs-grpc-test
+  other-modules:
+    HsGrpc.Server.FFI
+    HsGrpc.Server.Message
+
+  build-depends:
+    , async               ^>=2.2
+    , base                >=4.13 && <5
+    , bytestring          >=0.10 && <0.12
+    , ghc-prim
+    , microlens
+    , primitive
+    , proto-lens          ^>=0.7
+    , text
+
+  build-tool-depends: hsc2hs:hsc2hs -any
+  cxx-options:
+    -std=c++17 -Werror=switch -fcoroutines -DAGRPC_BOOST_ASIO
+    -DASIO_HAS_CO_AWAIT -DBOOST_ASIO_HAS_STD_COROUTINE
+    -DBOOST_ASIO_HAS_CO_AWAIT
+
+  if flag(useprotosuite)
+    build-depends: proto3-suite ^>=0.5
+    cpp-options:   -DHSGRPC_USE_PROTOSUITE
+
+  include-dirs:       include /usr/local/include
+  extra-lib-dirs:     /usr/local/lib
+  extra-libraries:
+    stdc++
+    atomic
+    grpc++
+    gpr
+    grpc++_reflection
+    protobuf
+    boost_coroutine
+    boost_system
+
+test-suite hs-grpc-server-test
   import:             common-lang
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
