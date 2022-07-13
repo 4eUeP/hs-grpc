@@ -1,0 +1,125 @@
+cabal-version:      2.4
+name:               hs-grpc-server
+version:            0.1.0.0
+synopsis:           gRPC Server in Haskell
+description:
+  Please see the README on Github at <https://github.com/4eUeP/hs-grpc#readme>
+
+license:            BSD-3-Clause
+license-file:       LICENSE
+copyright:          Copyright (c)
+author:             mu
+maintainer:         mu@laxcat.xyz
+tested-with:        GHC ==8.10.7
+category:           Network
+homepage:           https://github.com/4eUeP/hs-grpc
+bug-reports:        https://github.com/4eUeP/hs-grpc/issues
+build-type:         Custom
+extra-source-files:
+  ChangeLog.md
+  external/asio/asio/include/**/*.hpp
+  external/asio/asio/include/**/*.ipp
+  external/asio-grpc/src/**/*.hpp
+  external/asio-grpc/src/**/*.ipp
+  include/*.h
+  README.md
+
+custom-setup
+  setup-depends:
+    , base   >=4.5 && <5
+    , Cabal  >=2.4 && <4
+
+source-repository head
+  type:     git
+  location: https://github.com/4eUeP/hs-grpc
+
+flag UseProtoSuite
+  default:     False
+  description: Use proto3-suite as encoding & decoding
+
+common common-lang
+  default-language:   Haskell2010
+  default-extensions:
+    DeriveGeneric
+    DerivingStrategies
+    EmptyDataDeriving
+    GADTSyntax
+    GeneralizedNewtypeDeriving
+    LambdaCase
+    OverloadedStrings
+    RecordWildCards
+    ScopedTypeVariables
+    TypeApplications
+    UnliftedFFITypes
+    UnliftedNewtypes
+
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
+
+library
+  import:             common-lang
+  hs-source-dirs:     .
+  cxx-sources:
+    cbits/hs_grpc_common.cpp
+    cbits/hs_grpc_server.cpp
+
+  exposed-modules:
+    HsGrpc.Common.Log
+    HsGrpc.Server
+    HsGrpc.Server.Types
+
+  other-modules:
+    HsGrpc.Common.Foreign.Channel
+    HsGrpc.Common.Utils
+    HsGrpc.Server.FFI
+    HsGrpc.Server.Message
+
+  build-depends:
+    , async       ^>=2.2
+    , base        >=4.13  && <5
+    , bytestring  >=0.10  && <0.12
+    , foreign     >=0.1.1 && <1
+    , ghc-prim
+    , microlens
+    , primitive
+    , proto-lens  ^>=0.7
+    , text
+    , unix
+    , vector
+
+  build-tool-depends: hsc2hs:hsc2hs -any
+  cpp-options:        -std=c++17
+  cxx-options:
+    -std=c++17 -Werror=switch -fcoroutines -DAGRPC_STANDALONE_ASIO
+    -DASIO_HAS_CO_AWAIT -DASIO_HAS_STD_COROUTINE
+
+  if flag(useprotosuite)
+    build-depends: proto3-suite ^>=0.5
+    cpp-options:   -DHSGRPC_USE_PROTOSUITE
+
+  include-dirs:
+    external/asio/asio/include external/asio-grpc/src include
+    /usr/local/include
+
+  extra-lib-dirs:     /usr/local/lib
+  extra-libraries:
+    stdc++
+    atomic
+    grpc++
+    gpr
+    grpc++_reflection
+    protobuf
+
+test-suite hs-grpc-server-test
+  import:             common-lang
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test
+  build-depends:
+    , base            >=4.11 && <5
+    , hs-grpc-server
+    , hspec
+
+  build-tool-depends: hspec-discover:hspec-discover ==2.*
+  ghc-options:        -threaded -rtsopts -with-rtsopts=-N
