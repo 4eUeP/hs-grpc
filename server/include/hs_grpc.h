@@ -2,6 +2,9 @@
 
 #include <cstdint>
 
+#include <grpcpp/server.h>
+#include <grpcpp/server_builder.h>
+
 namespace hsgrpc {
 
 enum class StreamingType : uint8_t {

@@ -8,7 +8,34 @@ module HsGrpc.Server.Types
   , ProcessorCallback
   , mkProcessorCallback
   , withProcessorCallback
+
+  -- * Exceptions
   , ServerException (..)
+  , GrpcError (..)
+
+  -- * GRPC Status
+  --
+  -- $grpcStatus
+  , GrpcStatus (..)
+  , StatusCode
+  , pattern StatusOK
+  , pattern StatusCancelled
+  , pattern StatusUnknown
+  , pattern StatusInvalidArgument
+  , pattern StatusDeadlineExceeded
+  , pattern StatusNotFound
+  , pattern StatusAlreadyExists
+  , pattern StatusPermissionDenied
+  , pattern StatusUnauthenticated
+  , pattern StatusResourceExhausted
+  , pattern StatusFailedPrecondition
+  , pattern StatusAborted
+  , pattern StatusOutOfRange
+  , pattern StatusUnimplemented
+  , pattern StatusInternal
+  , pattern StatusUnavailable
+  , pattern StatusDataLoss
+  , pattern StatusDoNotUse
   ) where
 
 import           Control.Exception            (Exception, bracket)
@@ -118,8 +145,71 @@ streamingTypeFromCType C_StreamingType_BiDiStreaming   = BiDiStreaming
 
 newtype ServerException = ServerException Text
   deriving (Show, Eq)
-
 instance Exception ServerException
+
+newtype GrpcError = GrpcError GrpcStatus
+  deriving (Show, Eq)
+instance Exception GrpcError
+
+-------------------------------------------------------------------------------
+-- gprc::Status
+
+-- $grpcStatus
+--
+-- for details, see: https://grpc.github.io/grpc/cpp/classgrpc_1_1_status.html
+
+data GrpcStatus = GrpcStatus
+  { statusCode         :: StatusCode
+  , statusErrorMsg     :: Maybe ByteString
+  , statusErrorDetails :: Maybe ByteString
+  } deriving (Show, Eq)
+
+toCStatus :: GrpcStatus -> Ptr GrpcStatus
+toCStatus = undefined
+
+newtype StatusCode = StatusCode Int
+  deriving (Eq, Read, Show)
+
+#enum StatusCode, StatusCode \
+  , pattern StatusOK                 = grpc::StatusCode::OK                    \
+  , pattern StatusCancelled          = grpc::StatusCode::CANCELLED             \
+  , pattern StatusUnknown            = grpc::StatusCode::UNKNOWN               \
+  , pattern StatusInvalidArgument    = grpc::StatusCode::INVALID_ARGUMENT      \
+  , pattern StatusDeadlineExceeded   = grpc::StatusCode::DEADLINE_EXCEEDED     \
+  , pattern StatusNotFound           = grpc::StatusCode::NOT_FOUND             \
+  , pattern StatusAlreadyExists      = grpc::StatusCode::ALREADY_EXISTS        \
+  , pattern StatusPermissionDenied   = grpc::StatusCode::PERMISSION_DENIED     \
+  , pattern StatusUnauthenticated    = grpc::StatusCode::UNAUTHENTICATED       \
+  , pattern StatusResourceExhausted  = grpc::StatusCode::RESOURCE_EXHAUSTED    \
+  , pattern StatusFailedPrecondition = grpc::StatusCode::FAILED_PRECONDITION   \
+  , pattern StatusAborted            = grpc::StatusCode::ABORTED               \
+  , pattern StatusOutOfRange         = grpc::StatusCode::OUT_OF_RANGE          \
+  , pattern StatusUnimplemented      = grpc::StatusCode::UNIMPLEMENTED         \
+  , pattern StatusInternal           = grpc::StatusCode::INTERNAL              \
+  , pattern StatusUnavailable        = grpc::StatusCode::UNAVAILABLE           \
+  , pattern StatusDataLoss           = grpc::StatusCode::DATA_LOSS             \
+  , pattern StatusDoNotUse           = grpc::StatusCode::DO_NOT_USE
+
+{-# COMPLETE
+    StatusOK
+  , StatusCancelled
+  , StatusUnknown
+  , StatusInvalidArgument
+  , StatusDeadlineExceeded
+  , StatusNotFound
+  , StatusAlreadyExists
+  , StatusPermissionDenied
+  , StatusUnauthenticated
+  , StatusResourceExhausted
+  , StatusFailedPrecondition
+  , StatusAborted
+  , StatusOutOfRange
+  , StatusUnimplemented
+  , StatusInternal
+  , StatusUnavailable
+  , StatusDataLoss
+  , StatusDoNotUse
+  #-}
 
 -------------------------------------------------------------------------------
 -- Misc

@@ -2,8 +2,6 @@
 
 #include <agrpc/asioGrpc.hpp>
 #include <boost/asio/spawn.hpp>
-#include <grpcpp/server.h>
-#include <grpcpp/server_builder.h>
 
 #include <forward_list>
 #include <iostream>
