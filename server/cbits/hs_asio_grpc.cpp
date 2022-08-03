@@ -1,6 +1,6 @@
 #include <HsFFI.h>
 
-#include <agrpc/asioGrpc.hpp>
+#include <agrpc/asio_grpc.hpp>
 #include <boost/asio/spawn.hpp>
 
 #include <forward_list>
@@ -56,25 +56,25 @@ struct HsAsioProcessor {
     // -- Write the response message and finish this RPC with OK
     StreamingType streaming_type = response.streaming_type;
     switch (streaming_type) {
-    case StreamingType::NonStreaming: {
-      auto replySlice = grpc::Slice(response.data, response.data_size);
-      std::free(response.data);
-      agrpc::write_and_finish(reader_writer, grpc::ByteBuffer(&replySlice, 1),
-                              grpc::WriteOptions{}, grpc::Status::OK, yield);
-      break;
-    }
-    case StreamingType::ClientStreaming:
-      // TODO
-      throw std::logic_error("NotImplemented");
-      break;
-    case StreamingType::ServerStreaming:
-      // TODO
-      throw std::logic_error("NotImplemented");
-      break;
-    case StreamingType::BiDiStreaming:
-      // TODO
-      throw std::logic_error("NotImplemented");
-      break;
+      case StreamingType::NonStreaming: {
+        auto replySlice = grpc::Slice(response.data, response.data_size);
+        std::free(response.data);
+        agrpc::write_and_finish(reader_writer, grpc::ByteBuffer(&replySlice, 1),
+                                grpc::WriteOptions{}, grpc::Status::OK, yield);
+        break;
+      }
+      case StreamingType::ClientStreaming:
+        // TODO
+        throw std::logic_error("NotImplemented");
+        break;
+      case StreamingType::ServerStreaming:
+        // TODO
+        throw std::logic_error("NotImplemented");
+        break;
+      case StreamingType::BiDiStreaming:
+        // TODO
+        throw std::logic_error("NotImplemented");
+        break;
     } // Let compiler check that all enum values are handled.
   }
 

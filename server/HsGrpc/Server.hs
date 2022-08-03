@@ -15,7 +15,7 @@ module HsGrpc.Server
 
     -- * Handlers
   , UnaryHandler
-  , ServiceHandler (..)
+  , ServiceHandler
   , unary
   ) where
 
@@ -47,18 +47,20 @@ import           HsGrpc.Server.Types
 
 data GRPC (s :: Type) (m :: Symbol) = GRPC
 
-getGrpcMethod :: (HasMethod s m) => GRPC s m -> ByteString
+type GrpcMethod = ByteString
+
+getGrpcMethod :: (HasMethod s m) => GRPC s m -> GrpcMethod
 getGrpcMethod rpc =
   "/" <> srvPkg rpc Proxy <> "." <> srvName rpc Proxy <> "/"
       <> method rpc Proxy
   where
-    srvPkg :: (Service s) => GRPC s m -> Proxy (ServicePackage s) -> ByteString
+    srvPkg :: (Service s) => GRPC s m -> Proxy (ServicePackage s) -> GrpcMethod
     srvPkg _ p = BSC.pack $ symbolVal p
 
-    srvName :: (Service s) => GRPC s m -> Proxy (ServiceName s) -> ByteString
+    srvName :: (Service s) => GRPC s m -> Proxy (ServiceName s) -> GrpcMethod
     srvName _ p = BSC.pack $ symbolVal p
 
-    method :: (HasMethod s m) => GRPC s m -> Proxy (MethodName s m) -> ByteString
+    method :: (HasMethod s m) => GRPC s m -> Proxy (MethodName s m) -> GrpcMethod
     method _ p = BSC.pack $ symbolVal p
 {-# INLINE getGrpcMethod #-}
 
@@ -95,8 +97,8 @@ newServer ServerOptions{..} = do
   let !(BS.SBS host) = serverHost
       host_len = BS.length serverHost
   ptr <- new_server host host_len serverPort serverParallelism
-  if (ptr == nullPtr) then throwIO $ ServerException "newServer failed!"
-                      else newForeignPtr delete_server_fun ptr
+  if ptr == nullPtr then throwIO $ ServerException "newServer failed!"
+                    else newForeignPtr delete_server_fun ptr
 
 runGrpc :: Server -> [ServiceHandler] -> IO ()
 runGrpc server handlers =
@@ -112,24 +114,41 @@ runGrpc server handlers =
 type UnaryHandler i o = i -> IO o
 
 data ServiceHandler where
-  UnaryHandler :: (Message i, Message o) => ByteString -> UnaryHandler i o -> ServiceHandler
+  UnaryHandler
+    :: (Message i, Message o)
+    => GrpcMethod -> UnaryHandler i o -> ServiceHandler
 
 instance Show ServiceHandler where
-  show (UnaryHandler method _) = "Handler for " <> (Text.unpack $ Text.decodeUtf8 method)
+  show (UnaryHandler method _)      = "UnaryHandler for " <> bs2str method
+
+-- FIXME: how about define ServiceHandler as
+--
+-- data Handler where
+--   UnaryHandler :: (Message i, Message o) => UnaryHandler i o -> Handler
+--
+-- data ServiceHandler = ServiceHandler
+-- { handlerMethod :: GrpcMethod
+-- , rpcHandler    :: Handler
+-- }
+--
+-- so that we can get the method withoud pattern matching each handler.
+handlerMethod :: ServiceHandler -> GrpcMethod
+handlerMethod (UnaryHandler method _)      = method
 
 unary
   :: (HasMethod s m, Message i, Message o)
   => GRPC s m
   -> UnaryHandler i o
   -> ServiceHandler
-unary rpc handler = UnaryHandler (getGrpcMethod rpc) handler
+unary = UnaryHandler . getGrpcMethod
+
+-------------------------------------------------------------------------------
 
 processorCallback :: [ServiceHandler] -> ProcessorCallback
 processorCallback handlers request_ptr response_ptr = do
   Request{..} <- peek request_ptr
   -- TODO: use vector or map
-  let handle_m =
-        List.find (\(UnaryHandler method _) -> method == requestMethod) handlers
+  let handle_m = List.find (\h -> handlerMethod h == requestMethod) handlers
   case handle_m of
     -- TODO
     Nothing -> error "No such handler!"
@@ -145,3 +164,9 @@ processorCallback handlers request_ptr response_ptr = do
                                   , responseData = Just $ encodeMessage replyMsg
                                   }
           poke response_ptr response
+
+-------------------------------------------------------------------------------
+
+bs2str :: ByteString -> String
+bs2str = Text.unpack . Text.decodeUtf8
+{-# INLINE bs2str #-}
