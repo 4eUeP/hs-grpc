@@ -1,0 +1,129 @@
+name: CI
+on:
+  push:
+    branches: [main]
+
+  pull_request:
+    branches: [main]
+
+env:
+  LD_LIBRARY_PATH: "/usr/local/lib:$LD_LIBRARY_PATH"
+
+jobs:
+
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        ghc: ['8.10']
+        cabal: ['3.6']
+        grpc: ['v1.35.0']
+        os: [ubuntu-latest]  # macOS-latest
+
+    name: ghc-${{ matrix.ghc }} cabal-${{ matrix.cabal }} grpc-${{ matrix.grpc }} on ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: 'recursive'
+
+      - name: Haskell caches
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cabal/packages
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-${{ matrix.ghc }}-${{ matrix.cabal }}-v1-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.ghc }}-${{ matrix.cabal }}-v1-
+
+      # TODO
+      # - name: GRPC caches
+      #   uses: actions/cache@v2
+      #   with:
+      #     path: |
+      #       /opt/gprc-${{ matrix.grpc }}
+      #     key: ${{ runner.os }}-
+      #     restore-keys: |
+      #       ${{ runner.os }}-
+
+      - name: Install and setup gcc-10
+        run: |
+          sudo apt-get update && DEBIAN_FRONTEND="noninteractive" sudo apt-get install -y \
+            gcc-10 g++-10
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 20
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 20
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc 20
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-10 20
+
+      - name: Setup Haskell
+        uses: haskell/actions/setup@v1
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: ${{ matrix.cabal }}
+
+      - name: Update system PATH
+        run: |
+          echo "$HOME/.cabal/bin" >> $GITHUB_PATH
+
+      - name: Install build deps for grpc on linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && DEBIAN_FRONTEND="noninteractive" sudo apt-get install -y \
+            build-essential autoconf libtool libssl-dev pkg-config cmake
+
+      - name: (TODO) Install build deps for grpc on osx
+        if: runner.os == 'macOS'
+        run: brew install autoconf libtool openssl@1.1 pkg-config cmake shtool
+
+      - name: Build and install grpc
+        run: |
+          BUILD_DIR=$(mktemp -d)
+          cd $BUILD_DIR && \
+            git init && git remote add origin https://github.com/grpc/grpc.git && \
+            git fetch --depth 1 origin ${{ matrix.grpc }} && \
+            git checkout FETCH_HEAD && \
+            git submodule update --init --recursive --depth 1
+          mkdir -p /usr/local/{bin,lib,include}
+          cd $BUILD_DIR && \
+            cmake -DCMAKE_INSTALL_PREFIX=/usr/local \
+                  -DgRPC_BUILD_TESTS=OFF \
+                  -DBUILD_SHARED_LIBS=ON \
+                  -DgRPC_INSTALL=ON \
+                  -DCMAKE_BUILD_TYPE=Release \
+                  -DgRPC_SSL_PROVIDER=package \
+                  . && \
+            make -j $(nproc) && \
+            sudo make install -j $(nproc)
+
+      - name: sdist
+        run: |
+          mkdir -p $HOME/sdist
+          cabal sdist all --output-dir $HOME/sdist
+
+      - name: unpack
+        run: |
+          rm -rf $GITHUB_WORKSPACE/*
+          find $HOME/sdist -maxdepth 1 -type f -name '*.tar.gz' -exec tar -C $GITHUB_WORKSPACE -xzvf {} \;
+          cd $GITHUB_WORKSPACE && \
+            echo "packages:" > cabal.project && \
+            find . -maxdepth 4 -type f -name "*.cabal" -exec echo "  {}" \; >> cabal.project
+
+      - name: build
+        run: |
+          cabal install proto-lens-protoc   # hs-grpc-example requires this
+          cabal build all --upgrade-dependencies --enable-tests --enable-benchmarks
+
+      - name: test
+        run: cabal test all --test-show-details=always
+
+      # Unfortunately, there is no `cabal check all`
+      - name: check
+        run: |
+          for f in $(cat cabal.project |grep "\.cabal$"); do
+            bash -c "cd $(dirname $f) && cabal check"
+          done
+
+      - name: haddock
+        run: cabal haddock all
