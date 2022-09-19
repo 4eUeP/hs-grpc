@@ -15,7 +15,6 @@ import           Foreign.ForeignPtr
 import           Foreign.StablePtr        (StablePtr)
 import           Foreign.Storable
 import           GHC.Conc
-import           GHC.Stack                (HasCallStack)
 import           HsForeign                (unsafePeekStdString, withAsyncFFI,
                                            withPrimAsyncFFI)
 
