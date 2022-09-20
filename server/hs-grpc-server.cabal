@@ -72,9 +72,9 @@ library
 
   build-depends:
     , async       ^>=2.2
-    , base        >=4.13  && <5
-    , bytestring  >=0.10  && <0.12
-    , foreign     >=0.1.1 && <1
+    , base        >=4.14   && <5
+    , bytestring  >=0.10   && <0.12
+    , foreign     ^>=0.1.1
     , ghc-prim
     , microlens
     , primitive
