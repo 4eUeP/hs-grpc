@@ -103,7 +103,6 @@ library
   extra-lib-dirs:     /usr/local/lib
   extra-libraries:
     stdc++
-    atomic
     grpc++
     gpr
     grpc++_reflection

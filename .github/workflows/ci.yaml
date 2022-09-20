@@ -18,11 +18,12 @@ jobs:
         ghc: ['8.10']
         cabal: ['3.6']
         grpc: ['v1.35.0']
-        os: [ubuntu-latest]  # TODO: macOS-latest
+        #os: [ubuntu-latest]  # TODO: macOS-latest
+        os: [macOS-latest]
 
-    name: ghc-${{ matrix.ghc }} cabal-${{ matrix.cabal }} grpc-${{ matrix.grpc }} on ${{ matrix.os }}
+    name: "${{ matrix.os }}: ghc-${{ matrix.ghc }} cabal-${{ matrix.cabal }} grpc-${{ matrix.grpc }}"
     env:
-      GRPC_RELEASE_DIR: /opt/gprc-${{ matrix.grpc }}
+      GRPC_RELEASE_DIR: /opt/grpc-${{ matrix.grpc }}
 
     steps:
       - uses: actions/checkout@v2
@@ -40,22 +41,27 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.ghc }}-${{ matrix.cabal }}-v1-
 
+      - name: Setup grpc release dir
+        run: |
+          sudo mkdir -p $GRPC_RELEASE_DIR
+          export WHOAMI=$(whoami)
+          sudo chown -R $WHOAMI $GRPC_RELEASE_DIR
+
       - name: Grpc caches
         uses: actions/cache@v2
         with:
           path: |
-            /opt/gprc-${{ matrix.grpc }}
-          key: ${{ runner.os }}-
+            /opt/grpc-${{ matrix.grpc }}
+          key: ${{ runner.os }}-v1-${{ matrix.grpc }}
           restore-keys: |
-            ${{ runner.os }}-
+            ${{ runner.os }}-v1-
 
       - name: Check grpc caches
         run: |
-          if [ -e "$GRPC_RELEASE_DIR/lib/libgrpc++.so" ]; then
+          if [ -e "$GRPC_RELEASE_DIR/include/grpc++/grpc++.h" ]; then
             echo '::set-output name=INSTALLED::yes'
           else
-            # empty release dir
-            mkdir -p $GRPC_RELEASE_DIR && rm -rf $GRPC_RELEASE_DIR/*
+            rm -rf $GRPC_RELEASE_DIR/*    # empty release dir
             SRC_DIR=$(mktemp -d)
             cd $SRC_DIR && \
               git init && git remote add origin https://github.com/grpc/grpc.git && \
@@ -67,7 +73,7 @@ jobs:
           fi
         id: check-grpc-installed
 
-      - name: Install build deps on linux
+      - name: Install and setup deps on linux
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -77,10 +83,21 @@ jobs:
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 20
           sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc 20
           sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-10 20
+          echo "$HOME/.cabal/bin" >> $GITHUB_PATH
+          g++ --version
 
-      - name: (TODO) Install build deps on osx
+      - name: Install and setup deps on osx
         if: runner.os == 'macOS'
-        run: echo "TODO"
+        run: |
+          # realpath requires coreutils
+          brew install coreutils
+          # Currently, clang++ doesn't compiles
+          sudo ln -s /usr/local/bin/gcc-10 /usr/local/bin/gcc
+          sudo ln -s /usr/local/bin/g++-10 /usr/local/bin/g++
+          sudo ln -s /usr/local/bin/gcc /usr/local/bin/cc
+          sudo ln -s /usr/local/bin/g++ /usr/local/bin/c++
+          echo "/usr/local/bin:$HOME/.cabal/bin:$PATH" > $GITHUB_PATH
+          g++ --version
 
       - name: Build grpc on linux
         if: runner.os == 'Linux'
@@ -100,30 +117,51 @@ jobs:
                     -DgRPC_SSL_PROVIDER=package \
                     . && \
               make -j $(nproc) && \
-              sudo make install -j $(nproc)
+              make install -j $(nproc)
           fi
 
-      - name: (TODO) Build grpc on osx
+      - name: Build grpc on osx
         if: runner.os == 'macOS'
         run: |
-          brew install autoconf libtool openssl@1.1 pkg-config cmake shtool
+          if [ "${{ steps.check-grpc-installed.outputs.INSTALLED }}" == "yes" ]; then
+            echo "Use cached grpc: $GRPC_RELEASE_DIR"
+          else
+            brew install autoconf libtool openssl@1.1 pkg-config cmake shtool
+            cd ${{ steps.check-grpc-installed.outputs.SRC_DIR }} && \
+              cmake -DCMAKE_INSTALL_PREFIX=$GRPC_RELEASE_DIR \
+                    -DgRPC_BUILD_TESTS=OFF \
+                    -DBUILD_SHARED_LIBS=ON \
+                    -DgRPC_INSTALL=ON \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DgRPC_SSL_PROVIDER=package \
+                    -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl \
+                    . && \
+              make -j $(nproc) && \
+              make install -j $(nproc)
+          fi
 
       - name: Setup grpc
         run: |
           sudo mkdir -p /usr/local/{bin,lib,include}
-          sudo ln -s $(realpath $GRPC_RELEASE_DIR/bin)/* /usr/local/bin/
-          sudo ln -s $(realpath $GRPC_RELEASE_DIR/lib)/* /usr/local/lib/
-          sudo ln -s $(realpath $GRPC_RELEASE_DIR/include)/* /usr/local/include/
+          ABS_PATH=$(realpath $GRPC_RELEASE_DIR)
+          # bins
+          sudo ln -s $ABS_PATH/bin/grpc* /usr/local/bin/
+          sudo ln -s $ABS_PATH/bin/protoc* /usr/local/bin/
+          # includes
+          sudo rm -rf /usr/local/include/ares*
+          sudo ln -s $ABS_PATH/include/* /usr/local/include/
+          # libs
+          find $ABS_PATH/lib -mindepth 1 -maxdepth 1 \
+            ! -name cmake ! -name pkgconfig -exec sudo ln -s {} /usr/local/lib/ \;
+          sudo cp $ABS_PATH/lib/pkgconfig/* /usr/local/lib/pkgconfig/
+          sudo rm -rf /usr/local/lib/cmake/c-ares
+          sudo ln -s $ABS_PATH/lib/cmake/* /usr/local/lib/cmake/
 
       - name: Setup Haskell
         uses: haskell/actions/setup@v1
         with:
           ghc-version: ${{ matrix.ghc }}
           cabal-version: ${{ matrix.cabal }}
-
-      - name: Update system PATH
-        run: |
-          echo "$HOME/.cabal/bin" >> $GITHUB_PATH
 
       - name: sdist
         run: |
