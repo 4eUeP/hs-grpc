@@ -71,11 +71,15 @@ struct HsAsioHandler {
     // Return to client
     auto status_code = static_cast<grpc::StatusCode>(response.status_code);
     if (status_code == grpc::StatusCode::OK) {
-      auto replySlice = grpc::Slice(response.data, response.data_size);
-      std::free(response.data);
-      co_await agrpc::write_and_finish(reader_writer,
-                                       grpc::ByteBuffer(&replySlice, 1),
-                                       grpc::WriteOptions{}, grpc::Status::OK);
+      if (response.data) { // can be nullptr
+        auto replySlice = grpc::Slice(response.data, response.data_size);
+        std::free(response.data);
+        co_await agrpc::write_and_finish(
+            reader_writer, grpc::ByteBuffer(&replySlice, 1),
+            grpc::WriteOptions{}, grpc::Status::OK);
+      } else {
+        co_await agrpc::finish(reader_writer, grpc::Status::OK);
+      }
     } else {
       co_await agrpc::finish(reader_writer, errReplyStatus(response));
     }
