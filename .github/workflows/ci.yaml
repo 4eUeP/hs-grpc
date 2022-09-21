@@ -22,7 +22,7 @@ jobs:
 
     name: ghc-${{ matrix.ghc }} cabal-${{ matrix.cabal }} grpc-${{ matrix.grpc }} on ${{ matrix.os }}
     env:
-      GRPC_RELEASE_DIR: /opt/gprc-${{ matrix.grpc }}
+      GRPC_RELEASE_DIR: /opt/grpc-${{ matrix.grpc }}
 
     steps:
       - uses: actions/checkout@v2
@@ -44,7 +44,7 @@ jobs:
         uses: actions/cache@v2
         with:
           path: |
-            /opt/gprc-${{ matrix.grpc }}
+            /opt/grpc-${{ matrix.grpc }}
           key: ${{ runner.os }}-
           restore-keys: |
             ${{ runner.os }}-
