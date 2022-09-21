@@ -45,9 +45,9 @@ jobs:
         with:
           path: |
             /opt/grpc-${{ matrix.grpc }}
-          key: ${{ runner.os }}-
+          key: ${{ runner.os }}-grpc-${{ matrix.grpc }}
           restore-keys: |
-            ${{ runner.os }}-
+            ${{ runner.os }}-grpc
 
       - name: Check grpc caches
         run: |
