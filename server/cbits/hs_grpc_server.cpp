@@ -34,7 +34,8 @@ struct HsAsioHandler {
   asio::thread_pool& thread_pool;
 
   asio::awaitable<void>
-  handleUnary(grpc::GenericServerAsyncReaderWriter& reader_writer,
+  handleUnary(grpc::GenericServerContext& server_context,
+              grpc::GenericServerAsyncReaderWriter& reader_writer,
               server_request_t& request, server_response_t& response) {
     // Wait for the request message
     grpc::ByteBuffer buffer;
@@ -66,7 +67,7 @@ struct HsAsioHandler {
     request.data_size = input.size();
 
     // Call haskell handler
-    (*callback)(&request, &response);
+    (*callback)(&server_context, &request, &response);
 
     // Return to client
     auto status_code = static_cast<grpc::StatusCode>(response.status_code);
@@ -86,7 +87,8 @@ struct HsAsioHandler {
   }
 
   asio::awaitable<void>
-  handleBiDiStream(grpc::GenericServerAsyncReaderWriter& reader_writer,
+  handleBiDiStream(grpc::GenericServerContext& server_context,
+                   grpc::GenericServerAsyncReaderWriter& reader_writer,
                    server_request_t& request, server_response_t& response) {
     // TODO: let user chooses the maxBufferSize
     std::size_t maxBufferSize = 8192;
@@ -98,7 +100,7 @@ struct HsAsioHandler {
     request.channel_in = &channel_in;
     request.channel_out = &channel_out;
 
-    (*callback)(&request, &response);
+    (*callback)(&server_context, &request, &response);
 
     using namespace asio::experimental::awaitable_operators;
     const auto ok = co_await (reader(reader_writer, channel_in) &&
@@ -136,11 +138,13 @@ struct HsAsioHandler {
       request.handler_idx = _method->second.hs_handler_idx;
       switch (_method->second.type) {
         case StreamingType::NonStreaming: {
-          co_await handleUnary(reader_writer, request, response);
+          co_await handleUnary(server_context, reader_writer, request,
+                               response);
           break;
         }
         case StreamingType::BiDiStreaming: {
-          co_await handleBiDiStream(reader_writer, request, response);
+          co_await handleBiDiStream(server_context, reader_writer, request,
+                                    response);
           break;
         }
         case StreamingType::ClientStreaming:

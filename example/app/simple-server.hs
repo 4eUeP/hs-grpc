@@ -17,14 +17,14 @@ handlers = [ unary (GRPC :: GRPC P.Greeter "echo") handleEcho
            , bidiStream (GRPC :: GRPC P.Greeter "sayHelloBiDiStream") handleBiDiSayHello
            ]
 
-handleEcho :: P.EchoMsg -> IO P.EchoMsg
-handleEcho = pure
+handleEcho :: UnaryHandler P.EchoMsg P.EchoMsg
+handleEcho _ctx = pure
 
-handleSayHello :: P.HelloRequest -> IO P.HelloReply
-handleSayHello req = pure $ defMessage & P.msg .~ (req ^. P.name)
+handleSayHello :: UnaryHandler P.HelloRequest P.HelloReply
+handleSayHello _ctx req = pure $ defMessage & P.msg .~ (req ^. P.name)
 
-handleBiDiSayHello :: BiDiStream P.HelloRequest P.HelloReply -> IO ()
-handleBiDiSayHello stream = whileM $ do
+handleBiDiSayHello :: BiDiStreamHandler P.HelloRequest P.HelloReply ()
+handleBiDiSayHello _ctx stream = whileM $ do
   m_req <- streamRead stream
   case m_req of
     Just req -> do

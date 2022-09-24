@@ -6,6 +6,9 @@ module HsGrpc.Server.Types
 
   , ServerException (..)
 
+  -- * Grpc ServerContext
+  , ServerContext
+
   -- * Status
   , GrpcError (..)
   , throwGrpcError
@@ -121,10 +124,11 @@ withProcessorCallback cb = bracket (mkProcessorCallback cb) freeHaskellFunPtr
 -------------------------------------------------------------------------------
 
 data Request = Request
-  { requestPayload      :: ByteString
-  , requestHandlerIdx   :: Int
-  , requestReadChannel  :: Ptr CppChannelIn
-  , requestWriteChannel :: Ptr CppChannelOut
+  { requestPayload       :: ByteString
+  , requestHandlerIdx    :: Int
+  , requestReadChannel   :: Ptr CppChannelIn
+  , requestWriteChannel  :: Ptr CppChannelOut
+  , requestServerContext :: ServerContext
   } deriving (Show)
 
 instance Storable Request where
@@ -144,10 +148,12 @@ instance Storable Request where
     payload <- BS.unsafePackCStringLen (data_ptr, fromIntegral data_size)
     channelIn <- (#peek hsgrpc::server_request_t, channel_in) ptr
     channelOut <- (#peek hsgrpc::server_request_t, channel_out) ptr
-    return $ Request{ requestPayload      = payload
-                    , requestHandlerIdx   = handleIdx
-                    , requestReadChannel  = channelIn
-                    , requestWriteChannel = channelOut
+    serverContext <- (#peek hsgrpc::server_request_t, server_context) ptr
+    return $ Request{ requestPayload       = payload
+                    , requestHandlerIdx    = handleIdx
+                    , requestReadChannel   = channelIn
+                    , requestWriteChannel  = channelOut
+                    , requestServerContext = serverContext
                     }
   poke ptr Request{..} = do
     (data_ptr, data_size) <- HF.mallocFromByteString requestPayload
@@ -155,6 +161,7 @@ instance Storable Request where
     (#poke hsgrpc::server_request_t, data_size) ptr data_size
     (#poke hsgrpc::server_request_t, channel_in) ptr requestReadChannel
     (#poke hsgrpc::server_request_t, channel_out) ptr requestWriteChannel
+    (#poke hsgrpc::server_request_t, server_context) ptr requestServerContext
 
 data Response = Response
   { responseData         :: Maybe ByteString
@@ -241,6 +248,13 @@ streamingTypeFromCType C_StreamingType_NonStreaming    = NonStreaming
 streamingTypeFromCType C_StreamingType_ClientStreaming = ClientStreaming
 streamingTypeFromCType C_StreamingType_ServerStreaming = ServerStreaming
 streamingTypeFromCType C_StreamingType_BiDiStreaming   = BiDiStreaming
+
+-------------------------------------------------------------------------------
+-- (TODO) Grpc ServerContext
+
+data CServerContext
+
+type ServerContext = Ptr CServerContext
 
 -------------------------------------------------------------------------------
 -- GrpcSsl

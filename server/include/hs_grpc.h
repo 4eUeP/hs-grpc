@@ -47,6 +47,7 @@ struct server_request_t {
   HsInt handler_idx;
   ChannelIn* channel_in = nullptr;
   ChannelOut* channel_out = nullptr;
+  grpc::GenericServerContext* server_context = nullptr;
 };
 
 struct server_response_t {
@@ -57,7 +58,8 @@ struct server_response_t {
   std::string* error_details = nullptr;
 };
 
-using HsCallback = void (*)(server_request_t*, server_response_t*);
+using HsCallback = void (*)(grpc::GenericServerContext*, server_request_t*,
+                            server_response_t*);
 
 struct read_channel_cb_data_t {
   HsInt ec;

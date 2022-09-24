@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds    #-}
 {-# LANGUAGE GADTs        #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -10,6 +9,7 @@ module HsGrpc.Server
 
     -- * Handlers
   , UnaryHandler
+  , BiDiStreamHandler
   , ServiceHandler
   , unary
   , bidiStream
@@ -28,33 +28,33 @@ module HsGrpc.Server
   , runAsioGrpc
   ) where
 
-import           Control.Concurrent             (forkIO)
-import qualified Control.Concurrent.Async       as Async
-import qualified Control.Exception              as Ex
-import           Control.Monad                  (unless, void, when)
-import           Data.ByteString                (ByteString)
-import qualified Data.ByteString.Char8          as BSC
-import           Data.ByteString.Short          (ShortByteString)
-import           Data.Kind                      (Type)
-import           Data.ProtoLens.Service.Types   (HasMethod, MethodName,
-                                                 Service (..))
-import           Data.Proxy                     (Proxy (..))
-import qualified Data.Text                      as Text
-import qualified Data.Text.Encoding             as Text
-import           Data.Word                      (Word8)
-import           Foreign.ForeignPtr             (ForeignPtr, newForeignPtr,
-                                                 withForeignPtr)
-import           Foreign.Ptr                    (Ptr, nullPtr)
-import           Foreign.Storable               (peek, poke)
-import           GHC.TypeLits                   (Symbol, symbolVal)
-import qualified HsForeign                      as HF
-import qualified System.IO                      as IO
+import           Control.Concurrent            (forkIO)
+import qualified Control.Concurrent.Async      as Async
+import qualified Control.Exception             as Ex
+import           Control.Monad                 (unless, void, when)
+import           Data.ByteString               (ByteString)
+import qualified Data.ByteString.Char8         as BSC
+import           Data.ByteString.Short         (ShortByteString)
+import           Data.Kind                     (Type)
+import           Data.ProtoLens.Service.Types  (HasMethod, MethodName,
+                                                Service (..))
+import           Data.Proxy                    (Proxy (..))
+import qualified Data.Text                     as Text
+import qualified Data.Text.Encoding            as Text
+import           Data.Word                     (Word8)
+import           Foreign.ForeignPtr            (ForeignPtr, newForeignPtr,
+                                                withForeignPtr)
+import           Foreign.Ptr                   (Ptr, nullPtr)
+import           Foreign.Storable              (peek, poke)
+import           GHC.TypeLits                  (Symbol, symbolVal)
+import qualified HsForeign                     as HF
+import qualified System.IO                     as IO
 
 import           HsGrpc.Common.Foreign.Channel
 import           HsGrpc.Common.Utils
 import           HsGrpc.Server.FFI
-import           HsGrpc.Server.Message          (Message, decodeMessage,
-                                                 encodeMessage)
+import           HsGrpc.Server.Message         (Message, decodeMessage,
+                                                encodeMessage)
 import           HsGrpc.Server.Types
 
 -------------------------------------------------------------------------------
@@ -115,8 +115,8 @@ runAsioGrpc server handlers onStarted =
 -------------------------------------------------------------------------------
 -- Handlers
 
-type UnaryHandler i o = i -> IO o
-type BiDiStreamHandler i o a = BiDiStream i o -> IO a
+type UnaryHandler i o = ServerContext -> i -> IO o
+type BiDiStreamHandler i o a = ServerContext -> BiDiStream i o -> IO a
 
 data BiDiStream i o = BiDiStream
   { bidiReadChannel  :: {-# UNPACK #-}!(Ptr CppChannelIn)
@@ -199,7 +199,7 @@ unaryCallback Request{..} hd response_ptr = catchGrpcError response_ptr $ do
   case e_requestMsg of
     Left errmsg -> parsingReqErrReply response_ptr (BSC.pack errmsg)
     Right requestMsg -> do
-      replyBs <- encodeMessage <$> hd requestMsg
+      replyBs <- encodeMessage <$> hd requestServerContext requestMsg
       poke response_ptr defResponse{responseData = Just replyBs}
 {-# INLINABLE unaryCallback #-}
 
@@ -211,7 +211,7 @@ bidiStreamCallback
   -> IO ()
 bidiStreamCallback req hd response_ptr =
   let stream = BiDiStream (requestReadChannel req) (requestWriteChannel req)
-      action = void $ hd stream
+      action = void $ hd (requestServerContext req) stream
       clean = do
         closeOutChannel $ bidiWriteChannel stream
         closeInChannel $ bidiReadChannel stream
