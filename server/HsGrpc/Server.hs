@@ -35,7 +35,6 @@ import           Control.Monad                  (unless, void, when)
 import           Data.ByteString                (ByteString)
 import qualified Data.ByteString.Char8          as BSC
 import           Data.ByteString.Short          (ShortByteString)
-import qualified Data.ByteString.Short.Internal as BSS
 import           Data.Kind                      (Type)
 import           Data.ProtoLens.Service.Types   (HasMethod, MethodName,
                                                  Service (..))
@@ -48,7 +47,7 @@ import           Foreign.ForeignPtr             (ForeignPtr, newForeignPtr,
 import           Foreign.Ptr                    (Ptr, nullPtr)
 import           Foreign.Storable               (peek, poke)
 import           GHC.TypeLits                   (Symbol, symbolVal)
-import           HsForeign                      (withByteStrings, withPrimList)
+import qualified HsForeign                      as HF
 import qualified System.IO                      as IO
 
 import           HsGrpc.Common.Foreign.Channel
@@ -81,30 +80,35 @@ getGrpcMethod rpc =
 
 runServer :: ServerOptions -> [ServiceHandler] -> IO ()
 runServer ServerOptions{..} handlers = do
-  server <- newAsioServer serverHost serverPort serverParallelism
+  server <- newAsioServer serverHost serverPort serverSslOptions serverParallelism
   runAsioGrpc server handlers serverOnStarted
 
 -------------------------------------------------------------------------------
 
 type AsioServer = ForeignPtr CppAsioServer
 
-newAsioServer :: ShortByteString -> Int -> Int -> IO AsioServer
-newAsioServer host port parallelism = do
-  let !(BSS.SBS host') = host
-      host_len = BSS.length host
-  ptr <- new_asio_server host' host_len port parallelism
+newAsioServer
+  :: ShortByteString -> Int
+  -> Maybe SslServerCredentialsOptions
+  -> Int
+  -> IO AsioServer
+newAsioServer host port m_sslOpts parallelism = do
+  ptr <-
+    HF.withShortByteString host $ \host' host_len ->
+    HF.withMaybePtr m_sslOpts withSslServerCredentialsOptions $ \sslOpts' ->
+      new_asio_server host' host_len port sslOpts' parallelism
   if ptr == nullPtr then Ex.throwIO $ ServerException "newGrpcServer failed!"
                     else newForeignPtr delete_asio_server_fun ptr
 
 runAsioGrpc :: AsioServer -> [ServiceHandler] -> Maybe (IO ()) -> IO ()
 runAsioGrpc server handlers onStarted =
   withForeignPtr server $ \server_ptr ->
-  withByteStrings (map rpcMethod handlers) $ \ms' ms_off' ms_len' total_len ->
-  withPrimList (map (handlerCStreamingType . rpcHandler) handlers) $ \mt' _mt_len ->
+  HF.withByteStringList (map rpcMethod handlers) $ \ms' ms_len' total_len ->
+  HF.withPrimList (map (handlerCStreamingType . rpcHandler) handlers) $ \mt' _mt_len ->
   withProcessorCallback (processorCallback $ map rpcHandler handlers) $ \cbPtr -> do
     evm <- getSystemEventManager' $ ServerException "failed to get event manager"
     withFdEventNotification evm onStarted OneShot $ \(Fd cfdOnStarted) -> do
-      let start = run_asio_server server_ptr ms' ms_off' ms_len' mt' total_len cbPtr cfdOnStarted
+      let start = run_asio_server server_ptr ms' ms_len' mt' total_len cbPtr cfdOnStarted
           stop a = shutdown_asio_server server_ptr >> Async.wait a
        in Ex.bracket (Async.async start) stop Async.wait
 

@@ -211,8 +211,10 @@ struct CppAsioServer {
   std::unordered_map<std::string, hsgrpc::HandlerInfo> handler_methods_;
 };
 
-CppAsioServer* new_asio_server(const char* host, HsInt host_len, HsInt port,
-                               HsInt parallelism) {
+CppAsioServer*
+new_asio_server(const char* host, HsInt host_len, HsInt port,
+                hsgrpc::hs_ssl_server_credentials_options_t* ssl_server_opts,
+                HsInt parallelism) {
   const auto total_conc = std::thread::hardware_concurrency();
   if (parallelism <= 0 || parallelism > total_conc) {
     parallelism = total_conc;
@@ -229,7 +231,30 @@ CppAsioServer* new_asio_server(const char* host, HsInt host_len, HsInt port,
     server_data->grpc_contexts_.emplace_front(builder.AddCompletionQueue());
   }
 
-  builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+  if (!ssl_server_opts) {
+    builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+  } else {
+    grpc::SslServerCredentialsOptions ssl_opts_;
+    if (ssl_server_opts->pem_root_certs_data) {
+      ssl_opts_.pem_root_certs =
+          std::string(ssl_server_opts->pem_root_certs_data,
+                      ssl_server_opts->pem_root_certs_len);
+    }
+    for (HsInt i = 0; i < ssl_server_opts->pem_key_cert_pairs_size; ++i) {
+      ssl_opts_.pem_key_cert_pairs.emplace_back(
+          grpc::SslServerCredentialsOptions::PemKeyCertPair{
+              std::string(ssl_server_opts->pem_private_key_datas[i],
+                          ssl_server_opts->pem_private_key_lens[i]),
+              std::string(ssl_server_opts->pem_cert_chain_datas[i],
+                          ssl_server_opts->pem_cert_chain_lens[i])});
+    }
+    ssl_opts_.client_certificate_request =
+        ssl_server_opts->client_certificate_request;
+
+    auto channel_creds = grpc::SslServerCredentials(ssl_opts_);
+    builder.AddListeningPort(server_address, channel_creds);
+  }
+
   builder.RegisterAsyncGenericService(&server_data->service_);
 
   server_data->server_ = builder.BuildAndStart();
@@ -243,16 +268,15 @@ CppAsioServer* new_asio_server(const char* host, HsInt host_len, HsInt port,
 
 void run_asio_server(CppAsioServer* server,
                      // handler_methods: [(method_path: streaming_type)]
-                     char** handler_methods, HsInt* handler_methods_off,
-                     HsInt* handler_methods_len, uint8_t* handler_methods_type,
+                     char** handler_methods, HsInt* handler_methods_len,
+                     uint8_t* handler_methods_type,
                      HsInt handler_methods_total_len,
                      // payloads end
                      hsgrpc::HsCallback callback, int fd_on_started) {
   server->handler_methods_.reserve(handler_methods_total_len);
   for (HsInt i = 0; i < handler_methods_total_len; ++i) {
     server->handler_methods_.emplace(
-        std::make_pair(std::string(handler_methods[i] + handler_methods_off[i],
-                                   handler_methods_len[i]),
+        std::make_pair(std::string(handler_methods[i], handler_methods_len[i]),
                        hsgrpc::HandlerInfo{
                            hsgrpc::StreamingType(handler_methods_type[i]), i}));
   }

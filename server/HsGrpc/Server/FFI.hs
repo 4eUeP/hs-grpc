@@ -20,6 +20,7 @@ foreign import ccall unsafe "new_asio_server"
     -- ^ host, host_len
     -> Int
     -- ^ port
+    -> Ptr SslServerCredentialsOptions
     -> Int
     -- ^ parallelism
     -> IO (Ptr CppAsioServer)
@@ -33,7 +34,7 @@ foreign import ccall unsafe "&delete_asio_server"
 foreign import ccall safe "run_asio_server"
   run_asio_server
     :: Ptr CppAsioServer
-    -> Ptr (Ptr Word8) -> Ptr Int -> Ptr Int -> Ptr Word8{- StreamingType-} -> Int
+    -> Ptr (Ptr Word8) -> Ptr Int -> Ptr Word8{- StreamingType-} -> Int
     -> FunPtr ProcessorCallback
     -> CInt  -- ^ fd onStarted
     -> IO ()

@@ -41,6 +41,7 @@ main = do
   let opts = ServerOptions { serverHost = "0.0.0.0"
                            , serverPort = 50051
                            , serverParallelism = 0
+                           , serverSslOptions = Nothing
                            , serverOnStarted = Just onStarted
                            }
   gprSetLogVerbosity GprLogSeverityInfo

@@ -23,6 +23,22 @@ enum class StreamingType : uint8_t {
   BiDiStreaming
 };
 
+struct hs_ssl_server_credentials_options_t {
+  // SslServerCredentialsOptions: pem_root_certs
+  const char* pem_root_certs_data;
+  HsInt pem_root_certs_len;
+  // SslServerCredentialsOptions: list of pem_key_cert_pairs.private_key
+  const char** pem_private_key_datas;
+  HsInt* pem_private_key_lens;
+  // SslServerCredentialsOptions: contents of pem_key_cert_pairs.cert_chain
+  const char** pem_cert_chain_datas;
+  HsInt* pem_cert_chain_lens;
+  // SslServerCredentialsOptions: size of pem_key_cert_pairs
+  HsInt pem_key_cert_pairs_size;
+  // SslServerCredentialsOptions: client_certificate_request
+  grpc_ssl_client_certificate_request_type client_certificate_request;
+};
+
 struct server_request_t {
   uint8_t* data;
   size_t data_size;

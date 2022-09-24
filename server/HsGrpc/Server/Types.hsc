@@ -4,12 +4,12 @@
 module HsGrpc.Server.Types
   ( ServerOptions (..)
 
-  -- * Exceptions
   , ServerException (..)
+
+  -- * Status
   , GrpcError (..)
   , throwGrpcError
-
-  -- * GRPC Status
+  -- ** GrpcStatus
   --
   -- $grpcStatus
   , GrpcStatus (..)
@@ -32,6 +32,19 @@ module HsGrpc.Server.Types
   , pattern StatusUnavailable
   , pattern StatusDataLoss
   , pattern StatusDoNotUse
+
+    -- * Grpc Ssl
+  , SslServerCredentialsOptions (..)
+  , withSslServerCredentialsOptions
+    -- ** ClientCertificateRequestType
+    --
+    -- $grpcSslClientCertificateRequestType
+  , GrpcSslClientCertificateRequestType
+  , pattern GrpcSslDontRequestClientCertificate
+  , pattern GrpcSslRequestClientCertificateButDontVerify
+  , pattern GrpcSslRequestClientCertificateAndVerify
+  , pattern GrpcSslRequestAndRequireClientCertificateButDontVerify
+  , pattern GrpcSslRequestAndRequireClientCertificateAndVerify
 
     -- * Internal Types
   , Request (..)
@@ -59,6 +72,7 @@ import           Data.Maybe                    (isJust)
 import           Data.ProtoLens.Service.Types  (StreamingType (..))
 import           Data.Text                     (Text)
 import           Data.Word                     (Word64, Word8)
+import           Foreign.Marshal.Alloc         (allocaBytesAligned)
 import           Foreign.Ptr                   (FunPtr, Ptr, freeHaskellFunPtr,
                                                 nullPtr)
 import           Foreign.Storable              (Storable (..))
@@ -74,6 +88,7 @@ data ServerOptions = ServerOptions
   { serverHost        :: !ShortByteString
   , serverPort        :: !Int
   , serverParallelism :: !Int
+  , serverSslOptions  :: Maybe SslServerCredentialsOptions
   , serverOnStarted   :: !(Maybe (IO ()))
   }
 
@@ -83,8 +98,13 @@ instance Show ServerOptions where
      in "{" <> "host: " <> show serverHost <> ", "
             <> "port: " <> show serverPort <> ", "
             <> "parallelism: " <> show serverParallelism <> ", "
+            <> "sslOptions: " <> show serverSslOptions <> ", "
             <> "onStartedEvent: " <> notifyFn serverOnStarted
      <> "}"
+
+newtype ServerException = ServerException Text
+  deriving (Show, Eq)
+instance Exception ServerException
 
 -------------------------------------------------------------------------------
 
@@ -223,10 +243,128 @@ streamingTypeFromCType C_StreamingType_ServerStreaming = ServerStreaming
 streamingTypeFromCType C_StreamingType_BiDiStreaming   = BiDiStreaming
 
 -------------------------------------------------------------------------------
+-- GrpcSsl
 
-newtype ServerException = ServerException Text
-  deriving (Show, Eq)
-instance Exception ServerException
+data SslServerCredentialsOptions = SslServerCredentialsOptions
+  { pemKeyCertPairs :: [(ByteString, ByteString)]
+    -- ^ A list of pairs of the form [PEM-encoded private key, PEM-encoded
+    -- certificate chain].
+  , pemRootCerts   :: Maybe ByteString
+    -- ^ An optional byte string of PEM-encoded client root certificates that
+    -- the server will use to verify client authentication.
+    --
+    -- If Nothing, 'clientAuthType' must also NOT be
+    -- 'GrpcSslRequestAndRequireClientCertificateAndVerify'.
+  , clientAuthType :: GrpcSslClientCertificateRequestType
+    -- ^ A type indicating how clients to be authenticated.
+  } deriving (Show, Eq)
+
+instance Storable SslServerCredentialsOptions where
+  sizeOf _ = (#size hsgrpc::hs_ssl_server_credentials_options_t)
+  alignment _ = (#alignment hsgrpc::hs_ssl_server_credentials_options_t)
+  peek _ptr = error "Unimplemented"
+  poke _ _ = error "NotPokeable, see withSslServerCredentialsOptions for alternative"
+
+withSslServerCredentialsOptions
+  :: SslServerCredentialsOptions
+  -> (Ptr SslServerCredentialsOptions -> IO a)
+  -> IO a
+withSslServerCredentialsOptions o@SslServerCredentialsOptions{..} f =
+  allocaBytesAligned (sizeOf o) (alignment o) $ \ptr ->
+    HF.withMaybeByteString pemRootCerts $ \rootCertsPtr rootCertsLen ->
+    HF.withByteStringList (map fst pemKeyCertPairs) $ \p1 l1 s1 ->
+    HF.withByteStringList (map snd pemKeyCertPairs) $ \p2 l2 _the_same_as_s1 -> do
+      (#poke hsgrpc::hs_ssl_server_credentials_options_t, pem_root_certs_data) ptr rootCertsPtr
+      (#poke hsgrpc::hs_ssl_server_credentials_options_t, pem_root_certs_len) ptr rootCertsLen
+      (#poke hsgrpc::hs_ssl_server_credentials_options_t, pem_private_key_datas) ptr p1
+      (#poke hsgrpc::hs_ssl_server_credentials_options_t, pem_private_key_lens) ptr l1
+      (#poke hsgrpc::hs_ssl_server_credentials_options_t, pem_cert_chain_datas) ptr p2
+      (#poke hsgrpc::hs_ssl_server_credentials_options_t, pem_cert_chain_lens) ptr l2
+      (#poke hsgrpc::hs_ssl_server_credentials_options_t, pem_key_cert_pairs_size) ptr s1
+      (#poke hsgrpc::hs_ssl_server_credentials_options_t, client_certificate_request)
+          ptr (unGrpcSslClientCertificateRequestType clientAuthType)
+      f ptr
+
+newtype GrpcSslClientCertificateRequestType = GrpcSslClientCertificateRequestType
+  { unGrpcSslClientCertificateRequestType :: Int }
+  deriving (Eq, Read, Show)
+
+-- $grpcSslClientCertificateRequestType
+--
+-- * 'GrpcSslDontRequestClientCertificate'
+--
+-- Server does not request client certificate.
+--
+-- The certificate presented by the client is not checked by the server at all.
+-- (A client may present a self signed or signed certificate or not present a
+-- certificate at all and any of those option would be accepted)
+--
+-- * 'GrpcSslRequestClientCertificateButDontVerify'
+--
+-- Server requests client certificate but does not enforce that the client
+-- presents a certificate.
+--
+-- If the client presents a certificate, the client authentication is left to
+-- the application (the necessary metadata will be available to the application
+-- via authentication context properties, see grpc_auth_context).
+--
+-- The client's key certificate pair must be valid for the SSL connection to be
+-- established.
+--
+-- * 'GrpcSslRequestClientCertificateAndVerify'
+--
+-- Server requests client certificate but does not enforce that the client
+-- presents a certificate.
+--
+-- If the client presents a certificate, the client authentication is done by
+-- the gRPC framework. (For a successful connection the client needs to either
+-- present a certificate that can be verified against the root certificate
+-- configured by the server or not present a certificate at all)
+--
+-- The client's key certificate pair must be valid for the SSL connection to be
+-- established.
+--
+-- * 'GrpcSslRequestAndRequireClientCertificateButDontVerify'
+--
+-- Server requests client certificate and enforces that the client presents a
+-- certificate.
+--
+-- If the client presents a certificate, the client authentication is left to
+-- the application (the necessary metadata will be available to the application
+-- via authentication context properties, see grpc_auth_context).
+--
+-- The client's key certificate pair must be valid for the SSL connection to be
+-- established.
+--
+-- * 'GrpcSslRequestAndRequireClientCertificateAndVerify'
+--
+-- Server requests client certificate and enforces that the client presents a
+-- certificate.
+--
+-- The certificate presented by the client is verified by the gRPC framework.
+-- (For a successful connection the client needs to present a certificate that
+-- can be verified against the root certificate configured by the server)
+--
+-- The client's key certificate pair must be valid for the SSL connection to be
+-- established.
+
+#enum GrpcSslClientCertificateRequestType, GrpcSslClientCertificateRequestType \
+  , pattern GrpcSslDontRequestClientCertificate = GRPC_SSL_DONT_REQUEST_CLIENT_CERTIFICATE \
+  , pattern GrpcSslRequestClientCertificateButDontVerify = GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_BUT_DONT_VERIFY \
+  , pattern GrpcSslRequestClientCertificateAndVerify = GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_AND_VERIFY \
+  , pattern GrpcSslRequestAndRequireClientCertificateButDontVerify = GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_BUT_DONT_VERIFY \
+  , pattern GrpcSslRequestAndRequireClientCertificateAndVerify = GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY
+
+{-# COMPLETE
+    GrpcSslDontRequestClientCertificate
+  , GrpcSslRequestClientCertificateButDontVerify
+  , GrpcSslRequestClientCertificateAndVerify
+  , GrpcSslRequestAndRequireClientCertificateButDontVerify
+  , GrpcSslRequestAndRequireClientCertificateAndVerify
+  #-}
+
+-------------------------------------------------------------------------------
+-- Status
 
 newtype GrpcError = GrpcError GrpcStatus
   deriving (Show, Eq)
@@ -235,12 +373,9 @@ instance Exception GrpcError
 throwGrpcError :: GrpcStatus -> IO a
 throwGrpcError = throwIO . GrpcError
 
--------------------------------------------------------------------------------
--- gprc::Status
-
 -- $grpcStatus
 --
--- for details, see: https://grpc.github.io/grpc/cpp/classgrpc_1_1_status.html
+-- For details, see: https://grpc.github.io/grpc/cpp/classgrpc_1_1_status.html
 
 data GrpcStatus = GrpcStatus
   { statusCode         :: StatusCode
