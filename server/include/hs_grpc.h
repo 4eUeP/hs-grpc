@@ -58,8 +58,7 @@ struct server_response_t {
   std::string* error_details = nullptr;
 };
 
-using HsCallback = void (*)(grpc::GenericServerContext*, server_request_t*,
-                            server_response_t*);
+using HsCallback = void (*)(server_request_t*, server_response_t*);
 
 struct read_channel_cb_data_t {
   HsInt ec;

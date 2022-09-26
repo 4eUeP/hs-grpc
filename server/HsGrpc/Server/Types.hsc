@@ -153,7 +153,7 @@ instance Storable Request where
                     , requestHandlerIdx    = handleIdx
                     , requestReadChannel   = channelIn
                     , requestWriteChannel  = channelOut
-                    , requestServerContext = serverContext
+                    , requestServerContext = ServerContext serverContext
                     }
   poke ptr Request{..} = do
     (data_ptr, data_size) <- HF.mallocFromByteString requestPayload
@@ -161,7 +161,7 @@ instance Storable Request where
     (#poke hsgrpc::server_request_t, data_size) ptr data_size
     (#poke hsgrpc::server_request_t, channel_in) ptr requestReadChannel
     (#poke hsgrpc::server_request_t, channel_out) ptr requestWriteChannel
-    (#poke hsgrpc::server_request_t, server_context) ptr requestServerContext
+    (#poke hsgrpc::server_request_t, server_context) ptr (unServerContext requestServerContext)
 
 data Response = Response
   { responseData         :: Maybe ByteString
@@ -254,7 +254,8 @@ streamingTypeFromCType C_StreamingType_BiDiStreaming   = BiDiStreaming
 
 data CServerContext
 
-type ServerContext = Ptr CServerContext
+newtype ServerContext = ServerContext {unServerContext :: (Ptr CServerContext)}
+  deriving (Show)
 
 -------------------------------------------------------------------------------
 -- GrpcSsl

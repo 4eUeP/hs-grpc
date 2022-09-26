@@ -65,9 +65,10 @@ struct HsAsioHandler {
     // request.data_size = slice.size();
     request.data = (uint8_t*)input.data();
     request.data_size = input.size();
+    request.server_context = &server_context;
 
     // Call haskell handler
-    (*callback)(&server_context, &request, &response);
+    (*callback)(&request, &response);
 
     // Return to client
     auto status_code = static_cast<grpc::StatusCode>(response.status_code);
@@ -99,8 +100,9 @@ struct HsAsioHandler {
     request.data_size = 0;
     request.channel_in = &channel_in;
     request.channel_out = &channel_out;
+    request.server_context = &server_context;
 
-    (*callback)(&server_context, &request, &response);
+    (*callback)(&request, &response);
 
     using namespace asio::experimental::awaitable_operators;
     const auto ok = co_await (reader(reader_writer, channel_in) &&
