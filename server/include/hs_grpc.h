@@ -2,7 +2,7 @@
 
 #include <HsFFI.h>
 
-#include <asio/experimental/channel.hpp>
+#include <asio/experimental/concurrent_channel.hpp>
 #include <cstdint>
 #include <grpcpp/server.h>
 
@@ -11,10 +11,10 @@ namespace hsgrpc {
 bool byteBufferDumpToString(grpc::ByteBuffer& buffer, std::string& input);
 
 using ChannelIn =
-    asio::experimental::channel<void(asio::error_code, std::string)>;
+    asio::experimental::concurrent_channel<void(asio::error_code, std::string)>;
 
-using ChannelOut =
-    asio::experimental::channel<void(asio::error_code, grpc::ByteBuffer)>;
+using ChannelOut = asio::experimental::concurrent_channel<void(
+    asio::error_code, grpc::ByteBuffer)>;
 
 enum class StreamingType : uint8_t {
   NonStreaming = 1,
