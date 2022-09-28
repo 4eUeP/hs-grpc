@@ -1,9 +1,12 @@
+#include "hs_grpc_server.h"
+
 #include <forward_list>
 #include <iostream>
 #include <thread>
 #include <vector>
 
 #include <agrpc/asio_grpc.hpp>
+#include <asio/awaitable.hpp>
 #include <asio/bind_executor.hpp>
 #include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
@@ -12,16 +15,124 @@
 #include <grpc/support/log.h>
 #include <grpcpp/server_builder.h>
 
-#include "hs_grpc.h"
-
 namespace hsgrpc {
+// ----------------------------------------------------------------------------
+
+bool byteBufferDumpToString(grpc::ByteBuffer& buffer, std::string& input) {
+  auto size = buffer.Length();
+  input.reserve(size);
+
+  std::vector<grpc::Slice> input_slices;
+  auto r = buffer.Dump(&input_slices);
+  if (r.ok()) {
+    for (auto& slice : input_slices) {
+      input += std::string(std::begin(slice), std::end(slice));
+    }
+    return true;
+  } else {
+    return false;
+  }
+}
+
+grpc::Status consErrReplyStatus(server_response_t& response) {
+  auto status_code = static_cast<grpc::StatusCode>(response.status_code);
+  grpc::Status status;
+  if (response.error_msg) {
+    if (!response.error_details) {
+      status = grpc::Status(status_code, *response.error_msg);
+      delete response.error_msg;
+    } else {
+      status = grpc::Status(status_code, *response.error_msg,
+                            *response.error_details);
+      delete response.error_msg;
+      delete response.error_details;
+    }
+  } else {
+    if (!response.error_details) {
+      status = grpc::Status(status_code, "");
+    } else {
+      status = grpc::Status(status_code, "", *response.error_details);
+      delete response.error_details;
+    }
+  }
+  return status;
+}
 
 asio::awaitable<void>
-reader(grpc::GenericServerAsyncReaderWriter& reader_writer, ChannelIn& channel);
+finishGrpc(grpc::GenericServerAsyncReaderWriter& reader_writer,
+           server_response_t& response) {
+  auto status_code = static_cast<grpc::StatusCode>(response.status_code);
+  if (status_code == grpc::StatusCode::OK) {
+    co_await agrpc::finish(reader_writer, grpc::Status::OK);
+  } else {
+    co_await agrpc::finish(reader_writer, consErrReplyStatus(response));
+  }
+}
 
-asio::awaitable<bool>
-writer(grpc::GenericServerAsyncReaderWriter& reader_writer, ChannelOut& channel,
-       asio::thread_pool& thread_pool);
+struct StreamChannel {
+  grpc::GenericServerAsyncReaderWriter& reader_writer;
+  ChannelIn& channel_in;
+  ChannelOut& channel_out;
+  server_response_t& response;
+
+  asio::awaitable<void> reader() {
+    while (true) {
+      grpc::ByteBuffer buffer;
+
+      if (!co_await agrpc::read(reader_writer, buffer, asio::use_awaitable)) {
+        gpr_log(GPR_DEBUG, "Client is done writing.");
+        // Signal the writer to complete.
+        channel_in.close();
+        break;
+      }
+      std::string buffer_str;
+      // TODO: validate the return value of byteBufferDumpToString
+      byteBufferDumpToString(buffer, buffer_str);
+
+      if (!channel_in.is_open()) {
+        gpr_log(GPR_DEBUG, "ChannelIn got closed.");
+        break;
+      }
+      // Send request to writer. Using detached as completion token since we do
+      // not want to wait until the writer has picked up the request.
+      channel_in.async_send(asio::error_code{}, std::move(buffer_str),
+                            asio::detached);
+    }
+  }
+
+  // The writer will pick up reads from the reader through the channel and
+  // switch to the thread_pool to compute their response.
+  asio::awaitable<bool> writer(asio::thread_pool& thread_pool) {
+    bool ok{true};
+    while (ok) {
+      asio::error_code ec;
+      auto buffer = co_await channel_out.async_receive(
+          asio::redirect_error(asio::use_awaitable, ec));
+      if (ec) {
+        gpr_log(GPR_DEBUG, "ChannelOut got closed.");
+        ok = false;
+        break;
+      }
+      // switch to the thread_pool
+      co_await asio::post(
+          asio::bind_executor(thread_pool, asio::use_awaitable));
+      // reader_writer is thread-safe so we can just interact with it from the
+      // thread_pool.
+      ok = co_await agrpc::write(reader_writer, buffer, asio::use_awaitable);
+      // Now we are back on the main thread.
+    }
+    gpr_log(GPR_DEBUG, "Exit bidistream writer with %s", ok ? "true" : "false");
+
+    // FIXME: Here we finish the rpc if ChannelOut was closed.
+    //
+    // But how about server half-closed the stream? (server closes the
+    // response stream but client continues to send data)
+    if (!ok) {
+      co_await finishGrpc(reader_writer, response);
+    }
+    co_return ok;
+  }
+};
 
 struct HandlerInfo {
   StreamingType type;
@@ -83,7 +194,7 @@ struct HsAsioHandler {
         co_await agrpc::finish(reader_writer, grpc::Status::OK);
       }
     } else {
-      co_await agrpc::finish(reader_writer, errReplyStatus(response));
+      co_await agrpc::finish(reader_writer, consErrReplyStatus(response));
     }
   }
 
@@ -102,11 +213,16 @@ struct HsAsioHandler {
     request.channel_out = &channel_out;
     request.server_context = &server_context;
 
+    // pass initial datas to haskell
     (*callback)(&request, &response);
 
     using namespace asio::experimental::awaitable_operators;
-    const auto ok = co_await (reader(reader_writer, channel_in) &&
-                              writer(reader_writer, channel_out, thread_pool));
+    auto streamChannel =
+        StreamChannel{reader_writer, channel_in, channel_out, response};
+    const auto ok =
+        co_await (streamChannel.reader() && streamChannel.writer(thread_pool));
+
+    std::cout << "BidiStream end" << std::endl;
 
     // FIXME: do we really need this guard?
     // make sure we close all chennels
@@ -116,15 +232,10 @@ struct HsAsioHandler {
       channel_out.close();
 
     if (!ok) {
-      gpr_log(GPR_DEBUG, "Client has disconnected or server is shutting down.");
+      gpr_log(GPR_DEBUG, "Client has disconnected or server is shuttingdown.");
       co_return;
-    }
-
-    auto status_code = static_cast<grpc::StatusCode>(response.status_code);
-    if (status_code == grpc::StatusCode::OK) {
-      co_await agrpc::finish(reader_writer, grpc::Status::OK);
     } else {
-      co_await agrpc::finish(reader_writer, errReplyStatus(response));
+      co_await finishGrpc(reader_writer, response);
     }
   }
 
@@ -164,31 +275,6 @@ struct HsAsioHandler {
                                           "No such handler: " + method));
       co_return;
     }
-  }
-
-private:
-  grpc::Status errReplyStatus(server_response_t& response) {
-    auto status_code = static_cast<grpc::StatusCode>(response.status_code);
-    grpc::Status status;
-    if (response.error_msg) {
-      if (!response.error_details) {
-        status = grpc::Status(status_code, *response.error_msg);
-        delete response.error_msg;
-      } else {
-        status = grpc::Status(status_code, *response.error_msg,
-                              *response.error_details);
-        delete response.error_msg;
-        delete response.error_details;
-      }
-    } else {
-      if (!response.error_details) {
-        status = grpc::Status(status_code, "");
-      } else {
-        status = grpc::Status(status_code, "", *response.error_details);
-        delete response.error_details;
-      }
-    }
-    return status;
   }
 };
 
@@ -317,6 +403,35 @@ void delete_asio_server(CppAsioServer* server) {
   gpr_log(GPR_DEBUG, "Delete allocated server");
   delete server;
 }
+
+void read_channel(hsgrpc::ChannelIn* channel, HsStablePtr mvar, HsInt cap,
+                  hsgrpc::read_channel_cb_data_t* cb_data) {
+  channel->async_receive(
+      [mvar, cap, cb_data](asio::error_code ec, std::string&& buf) {
+        if (cb_data) {
+          cb_data->ec = (HsInt)ec.value();
+          cb_data->buf = new std::string(buf); // delete on haskell side
+        }
+        hs_try_putmvar(cap, mvar);
+      });
+}
+
+void write_channel(hsgrpc::ChannelOut* channel, const char* payload,
+                   HsInt offset, HsInt length, HsStablePtr mvar, HsInt cap,
+                   HsInt* ret_code) {
+  auto replySlice = grpc::Slice(payload + offset, length); // copy constructor?
+  // Also copy constructor? FIXME: does this means to be copied twice?
+  auto reply = grpc::ByteBuffer(&replySlice, 1);
+  channel->async_send(asio::error_code{}, std::move(reply),
+                      [cap, mvar, ret_code](asio::error_code ec) {
+                        *ret_code = (HsInt)ec.value();
+                        hs_try_putmvar(cap, mvar);
+                      });
+}
+
+void close_in_channel(hsgrpc::ChannelIn* channel) { channel->close(); }
+
+void close_out_channel(hsgrpc::ChannelOut* channel) { channel->close(); }
 
 // ----------------------------------------------------------------------------
 } // End extern "C"

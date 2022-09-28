@@ -56,7 +56,6 @@ library
   import:             common-lang
   hs-source-dirs:     .
   cxx-sources:
-    cbits/hs_grpc_common.cpp
     cbits/hs_grpc_server.cpp
 
   exposed-modules:

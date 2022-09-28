@@ -236,8 +236,7 @@ catchGrpcError' ptr sequel action =
             pure Nothing
         ]
    in do a <- (Just <$> action) `Ex.catches` handlers
-         _ <- sequel
-         pure a
+         maybe (pure Nothing) (\x -> do _ <- sequel; pure $ Just x) a
 
 errReply :: Ptr Response -> GrpcStatus -> IO ()
 errReply ptr GrpcStatus{..} =
