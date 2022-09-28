@@ -18,7 +18,7 @@ import           GHC.Conc
 import           HsForeign                (unsafePeekStdString, withAsyncFFI,
                                            withPrimAsyncFFI)
 
-#include "hs_grpc.h"
+#include "hs_grpc_server.h"
 
 -------------------------------------------------------------------------------
 

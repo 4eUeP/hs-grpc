@@ -83,7 +83,7 @@ import qualified HsForeign                     as HF
 
 import           HsGrpc.Common.Foreign.Channel
 
-#include "hs_grpc.h"
+#include "hs_grpc_server.h"
 
 -------------------------------------------------------------------------------
 
