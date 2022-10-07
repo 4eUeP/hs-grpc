@@ -153,7 +153,6 @@ struct HsAsioHandler {
     bool read_ok = co_await agrpc::read(reader_writer, buffer);
     if (!read_ok) {
       gpr_log(GPR_DEBUG, "Read failed, maybe client is done writing.");
-      co_await agrpc::finish(reader_writer, grpc::Status::OK);
       co_return;
     }
 

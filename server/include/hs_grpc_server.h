@@ -42,8 +42,6 @@ struct hs_ssl_server_credentials_options_t {
 struct server_request_t {
   uint8_t* data;
   size_t data_size;
-  uint8_t* method;
-  size_t method_size;
   HsInt handler_idx;
   ChannelIn* channel_in = nullptr;
   ChannelOut* channel_out = nullptr;
