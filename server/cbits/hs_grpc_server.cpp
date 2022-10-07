@@ -137,17 +137,19 @@ struct StreamChannel {
 struct HandlerInfo {
   StreamingType type;
   HsInt hs_handler_idx;
+  bool use_thread_pool;
 };
 
 struct HsAsioHandler {
-  std::unordered_map<std::string, HandlerInfo>& handler_methods;
+  std::unordered_map<std::string, HandlerInfo>& method_handlers;
   HsCallback& callback;
   asio::thread_pool& thread_pool;
 
   asio::awaitable<void>
   handleUnary(grpc::GenericServerContext& server_context,
               grpc::GenericServerAsyncReaderWriter& reader_writer,
-              server_request_t& request, server_response_t& response) {
+              server_request_t& request, server_response_t& response,
+              bool use_thread_pool) {
     // Wait for the request message
     grpc::ByteBuffer buffer;
     bool read_ok = co_await agrpc::read(reader_writer, buffer);
@@ -177,6 +179,10 @@ struct HsAsioHandler {
     request.data_size = input.size();
     request.server_context = &server_context;
 
+    if (use_thread_pool) {
+      co_await asio::post(
+          asio::bind_executor(thread_pool, asio::use_awaitable));
+    }
     // Call haskell handler
     (*callback)(&request, &response);
 
@@ -221,8 +227,6 @@ struct HsAsioHandler {
     const auto ok =
         co_await (streamChannel.reader() && streamChannel.writer(thread_pool));
 
-    std::cout << "BidiStream end" << std::endl;
-
     // FIXME: do we really need this guard?
     // make sure we close all chennels
     if (channel_in.is_open())
@@ -243,15 +247,15 @@ struct HsAsioHandler {
              grpc::GenericServerAsyncReaderWriter& reader_writer) {
     // -- Find handlers
     auto method = server_context.method();
-    auto _method = handler_methods.find(method);
-    if (_method != handler_methods.end()) {
+    auto method_handler_ = method_handlers.find(method);
+    if (method_handler_ != method_handlers.end()) {
       server_request_t request;
       server_response_t response;
-      request.handler_idx = _method->second.hs_handler_idx;
-      switch (_method->second.type) {
+      request.handler_idx = method_handler_->second.hs_handler_idx;
+      switch (method_handler_->second.type) {
         case StreamingType::NonStreaming: {
-          co_await handleUnary(server_context, reader_writer, request,
-                               response);
+          co_await handleUnary(server_context, reader_writer, request, response,
+                               method_handler_->second.use_thread_pool);
           break;
         }
         case StreamingType::BiDiStreaming: {
@@ -299,7 +303,7 @@ struct CppAsioServer {
   grpc::AsyncGenericService service_;
   std::forward_list<agrpc::GrpcContext> grpc_contexts_;
   std::vector<std::thread> server_threads_;
-  std::unordered_map<std::string, hsgrpc::HandlerInfo> handler_methods_;
+  std::unordered_map<std::string, hsgrpc::HandlerInfo> method_handlers_;
 };
 
 CppAsioServer*
@@ -358,18 +362,19 @@ new_asio_server(const char* host, HsInt host_len, HsInt port,
 }
 
 void run_asio_server(CppAsioServer* server,
-                     // handler_methods: [(method_path: streaming_type)]
-                     char** handler_methods, HsInt* handler_methods_len,
-                     uint8_t* handler_methods_type,
-                     HsInt handler_methods_total_len,
-                     // payloads end
+                     // method handlers: Map[(method_path, HandlerInfo)]
+                     char** method_handlers, HsInt* method_handlers_len,
+                     uint8_t* method_handlers_type,
+                     bool* method_handlers_use_thread_pool,
+                     HsInt method_handlers_total_len,
+                     // method handlers end
                      hsgrpc::HsCallback callback, int fd_on_started) {
-  server->handler_methods_.reserve(handler_methods_total_len);
-  for (HsInt i = 0; i < handler_methods_total_len; ++i) {
-    server->handler_methods_.emplace(
-        std::make_pair(std::string(handler_methods[i], handler_methods_len[i]),
-                       hsgrpc::HandlerInfo{
-                           hsgrpc::StreamingType(handler_methods_type[i]), i}));
+  server->method_handlers_.reserve(method_handlers_total_len);
+  for (HsInt i = 0; i < method_handlers_total_len; ++i) {
+    server->method_handlers_.emplace(std::make_pair(
+        std::string(method_handlers[i], method_handlers_len[i]),
+        hsgrpc::HandlerInfo{hsgrpc::StreamingType(method_handlers_type[i]), i,
+                            method_handlers_use_thread_pool[i]}));
   }
 
   auto parallelism = server->server_threads_.capacity();
@@ -380,7 +385,7 @@ void run_asio_server(CppAsioServer* server,
       agrpc::repeatedly_request(
           server->service_,
           asio::bind_executor(grpc_context,
-                              hsgrpc::HsAsioHandler{server->handler_methods_,
+                              hsgrpc::HsAsioHandler{server->method_handlers_,
                                                     callback, thread_pool}));
       grpc_context.run();
     });

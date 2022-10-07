@@ -34,7 +34,16 @@ foreign import ccall unsafe "&delete_asio_server"
 foreign import ccall safe "run_asio_server"
   run_asio_server
     :: Ptr CppAsioServer
-    -> Ptr (Ptr Word8) -> Ptr Int -> Ptr Word8{- StreamingType-} -> Int
+    -> Ptr (Ptr Word8)
+    -- ^ Key of method_handlers: data(NOT null terminated)
+    -> Ptr Int
+    -- ^ Key of method_handlers: size
+    -> Ptr Word8
+    -- ^ Value of method_handlers: StreamingType
+    -> Ptr CBool
+    -- ^ Value of method_handlers: use_thread_pool
+    -> Int
+    -- ^ Total size of method_handlers
     -> FunPtr ProcessorCallback
     -> CInt  -- ^ fd onStarted
     -> IO ()

@@ -13,6 +13,7 @@ module HsGrpc.Server
   , ServiceHandler
   , unary
   , bidiStream
+  , handlerUseThreadPool
     -- **
   , BiDiStream
   , streamRead
@@ -44,6 +45,7 @@ import qualified Data.Text.Encoding            as Text
 import           Data.Word                     (Word8)
 import           Foreign.ForeignPtr            (ForeignPtr, newForeignPtr,
                                                 withForeignPtr)
+import           Foreign.Marshal.Utils         (fromBool)
 import           Foreign.Ptr                   (Ptr, nullPtr)
 import           Foreign.Storable              (peek, poke)
 import           GHC.TypeLits                  (Symbol, symbolVal)
@@ -103,12 +105,18 @@ newAsioServer host port m_sslOpts parallelism = do
 runAsioGrpc :: AsioServer -> [ServiceHandler] -> Maybe (IO ()) -> IO ()
 runAsioGrpc server handlers onStarted =
   withForeignPtr server $ \server_ptr ->
+  -- handlers info
   HF.withByteStringList (map rpcMethod handlers) $ \ms' ms_len' total_len ->
   HF.withPrimList (map (handlerCStreamingType . rpcHandler) handlers) $ \mt' _mt_len ->
+  HF.withPrimList (map (fromBool . rpcUseThreadPool) handlers) $ \mUseThread' _ ->
+  -- handlers callback
   withProcessorCallback (processorCallback $ map rpcHandler handlers) $ \cbPtr -> do
     evm <- getSystemEventManager' $ ServerException "failed to get event manager"
     withFdEventNotification evm onStarted OneShot $ \(Fd cfdOnStarted) -> do
-      let start = run_asio_server server_ptr ms' ms_len' mt' total_len cbPtr cfdOnStarted
+      let start = run_asio_server server_ptr
+                                  ms' ms_len' mt' mUseThread' total_len
+                                  cbPtr
+                                  cfdOnStarted
           stop a = shutdown_asio_server server_ptr >> Async.wait a
        in Ex.bracket (Async.async start) stop Async.wait
 
@@ -156,9 +164,15 @@ handlerCStreamingType (UnaryHandler _)      = C_StreamingType_NonStreaming
 handlerCStreamingType (BiDiStreamHandler _) = C_StreamingType_BiDiStreaming
 
 data ServiceHandler = ServiceHandler
-  { rpcMethod  :: !GrpcMethod
-  , rpcHandler :: !RpcHandler
+  { rpcMethod        :: !GrpcMethod
+  , rpcHandler       :: !RpcHandler
+  , rpcUseThreadPool :: !Bool
   } deriving (Show)
+
+-- | Switch to a thread_pool to run the Handler. The may only useful for unary
+-- handler.
+handlerUseThreadPool :: ServiceHandler -> ServiceHandler
+handlerUseThreadPool handler = handler{rpcUseThreadPool = True}
 
 unary
   :: (HasMethod s m, Message i, Message o)
@@ -168,6 +182,7 @@ unary
 unary grpc handler =
   ServiceHandler{ rpcMethod = getGrpcMethod grpc
                 , rpcHandler = UnaryHandler handler
+                , rpcUseThreadPool = False
                 }
 
 bidiStream
@@ -178,6 +193,7 @@ bidiStream
 bidiStream grpc handler =
   ServiceHandler{ rpcMethod = getGrpcMethod grpc
                 , rpcHandler = BiDiStreamHandler handler
+                , rpcUseThreadPool = False
                 }
 
 -------------------------------------------------------------------------------
