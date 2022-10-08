@@ -80,8 +80,8 @@ struct StreamChannel {
       grpc::ByteBuffer buffer;
 
       if (!co_await agrpc::read(reader_writer, buffer, asio::use_awaitable)) {
-        gpr_log(GPR_DEBUG, "Client is done writing.");
-        // Signal the writer to complete.
+        gpr_log(GPR_DEBUG,
+                "StreamChannel read failed, maybe client is done writing.");
         channel_in.close();
         break;
       }
@@ -90,7 +90,7 @@ struct StreamChannel {
       byteBufferDumpToString(buffer, buffer_str);
 
       if (!channel_in.is_open()) {
-        gpr_log(GPR_DEBUG, "ChannelIn got closed.");
+        gpr_log(GPR_DEBUG, "StreamChannel ChannelIn got closed.");
         break;
       }
       // Send request to writer. Using detached as completion token since we do
@@ -98,6 +98,7 @@ struct StreamChannel {
       channel_in.async_send(asio::error_code{}, std::move(buffer_str),
                             asio::detached);
     }
+    gpr_log(GPR_DEBUG, "Exit StreamChannel reader");
   }
 
   // The writer will pick up reads from the reader through the channel and
@@ -109,7 +110,7 @@ struct StreamChannel {
       auto buffer = co_await channel_out.async_receive(
           asio::redirect_error(asio::use_awaitable, ec));
       if (ec) {
-        gpr_log(GPR_DEBUG, "ChannelOut got closed.");
+        gpr_log(GPR_DEBUG, "StreamChannel ChannelOut got closed.");
         ok = false;
         break;
       }
@@ -121,7 +122,8 @@ struct StreamChannel {
       ok = co_await agrpc::write(reader_writer, buffer, asio::use_awaitable);
       // Now we are back on the main thread.
     }
-    gpr_log(GPR_DEBUG, "Exit bidistream writer with %s", ok ? "true" : "false");
+    gpr_log(GPR_DEBUG, "Exit StreamChannel writer with %s",
+            ok ? "true" : "false");
 
     // FIXME: Here we finish the rpc if ChannelOut was closed.
     //
