@@ -32,7 +32,7 @@ module HsGrpc.Server
 import           Control.Concurrent            (forkIO)
 import qualified Control.Concurrent.Async      as Async
 import qualified Control.Exception             as Ex
-import           Control.Monad                 (unless, void, when)
+import           Control.Monad                 (void, when)
 import           Data.ByteString               (ByteString)
 import qualified Data.ByteString.Char8         as BSC
 import           Data.ByteString.Short         (ShortByteString)
@@ -142,12 +142,11 @@ streamRead stream = do
         Left errmsg -> Ex.throwIO $ ServerException (Text.pack errmsg)
         Right msg   -> return (Just msg)
 
-streamWrite :: Message o => BiDiStream i o -> Maybe o -> IO ()
-streamWrite stream Nothing = closeOutChannel $ bidiWriteChannel stream
+streamWrite :: Message o => BiDiStream i o -> Maybe o -> IO (Either String ())
+streamWrite stream Nothing = Right <$> closeOutChannel (bidiWriteChannel stream)
 streamWrite stream (Just msg) = do
   ret <- writeCppChannel (bidiWriteChannel stream) $ encodeMessage msg
-  -- FIXME: Choose another specific exception?
-  unless (ret == 0) $ Ex.throwIO $ ServerException "writeCppChannel failed"
+  pure $ if ret == 0 then Right () else Left "writeCppChannel failed"
 
 data RpcHandler where
   UnaryHandler

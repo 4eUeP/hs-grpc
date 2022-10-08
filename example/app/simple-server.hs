@@ -3,6 +3,7 @@
 
 module Main where
 
+import           Data.Either             (isRight)
 import           Data.ProtoLens          (defMessage)
 import           Lens.Micro
 
@@ -29,8 +30,7 @@ handleBiDiSayHello _ctx stream = whileM $ do
   case m_req of
     Just req -> do
       let reply = defMessage & P.msg .~ ("hi, " <> req ^. P.name)
-      streamWrite stream (Just reply)
-      pure True
+      isRight <$> streamWrite stream (Just reply)
     Nothing -> putStrLn "Client closed" >> pure False
 
 onStarted :: IO ()
