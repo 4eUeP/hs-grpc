@@ -91,7 +91,7 @@ data ServerOptions = ServerOptions
   { serverHost        :: !ShortByteString
   , serverPort        :: !Int
   , serverParallelism :: !Int
-  , serverSslOptions  :: Maybe SslServerCredentialsOptions
+  , serverSslOptions  :: !(Maybe SslServerCredentialsOptions)
   , serverOnStarted   :: !(Maybe (IO ()))
   }
 
