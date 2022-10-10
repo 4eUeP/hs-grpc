@@ -3,6 +3,7 @@
 
 module Main where
 
+import           Control.Concurrent      (threadDelay)
 import           Data.Either             (isRight)
 import           Data.ProtoLens          (defMessage)
 import           Lens.Micro
@@ -15,7 +16,8 @@ import           Proto.Helloworld_Fields as P
 handlers :: [ServiceHandler]
 handlers = [ unary (GRPC :: GRPC P.Greeter "echo") handleEcho
            , unary (GRPC :: GRPC P.Greeter "sayHello") handleSayHello
-           , bidiStream (GRPC :: GRPC P.Greeter "sayHelloBiDiStream") handleBiDiSayHello
+           , serverStream (GRPC :: GRPC P.Greeter "sayHelloServerStream") handleServerStreamSayHello
+           , bidiStream (GRPC :: GRPC P.Greeter "sayHelloBiDiStream") handleBidiSayHello
            ]
 
 handleEcho :: UnaryHandler P.EchoMsg P.EchoMsg
@@ -24,8 +26,18 @@ handleEcho _ctx = pure
 handleSayHello :: UnaryHandler P.HelloRequest P.HelloReply
 handleSayHello _ctx req = pure $ defMessage & P.msg .~ (req ^. P.name)
 
-handleBiDiSayHello :: BiDiStreamHandler P.HelloRequest P.HelloReply ()
-handleBiDiSayHello _ctx stream = whileM $ do
+handleServerStreamSayHello :: ServerStreamHandler P.HelloRequest P.HelloReply ()
+handleServerStreamSayHello _ctx req stream = do
+  putStrLn $ "Received client request " <> show req
+  whileM $ do
+    threadDelay 1000000
+    putStrLn "Sending reply..."
+    let reply = defMessage & P.msg .~ ("hi, " <> req ^. P.name)
+    isRight <$> streamWrite stream (Just reply)
+  putStrLn "Server streaming done."
+
+handleBidiSayHello :: BidiStreamHandler P.HelloRequest P.HelloReply ()
+handleBidiSayHello _ctx stream = whileM $ do
   m_req <- streamRead stream
   case m_req of
     Just req -> do

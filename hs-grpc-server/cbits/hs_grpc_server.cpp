@@ -71,32 +71,35 @@ finishGrpc(grpc::GenericServerAsyncReaderWriter& reader_writer,
 
 struct StreamChannel {
   grpc::GenericServerAsyncReaderWriter& reader_writer;
-  ChannelIn& channel_in;
-  ChannelOut& channel_out;
+  ChannelIn* channel_in{nullptr};
+  ChannelOut* channel_out{nullptr};
   server_response_t& response;
 
   asio::awaitable<void> reader() {
+    if (!channel_in) {
+      throw std::logic_error("Empty ChannelIn!");
+    }
     while (true) {
       grpc::ByteBuffer buffer;
 
       if (!co_await agrpc::read(reader_writer, buffer, asio::use_awaitable)) {
         gpr_log(GPR_DEBUG,
                 "StreamChannel read failed, maybe client is done writing.");
-        channel_in.close();
+        channel_in->close();
         break;
       }
       std::string buffer_str;
       // TODO: validate the return value of byteBufferDumpToString
       byteBufferDumpToString(buffer, buffer_str);
 
-      if (!channel_in.is_open()) {
+      if (!channel_in->is_open()) {
         gpr_log(GPR_DEBUG, "StreamChannel ChannelIn got closed.");
         break;
       }
       // Send request to writer. Using detached as completion token since we do
       // not want to wait until the writer has picked up the request.
-      channel_in.async_send(asio::error_code{}, std::move(buffer_str),
-                            asio::detached);
+      channel_in->async_send(asio::error_code{}, std::move(buffer_str),
+                             asio::detached);
     }
     gpr_log(GPR_DEBUG, "Exit StreamChannel reader");
   }
@@ -104,10 +107,13 @@ struct StreamChannel {
   // The writer will pick up reads from the reader through the channel and
   // switch to the thread_pool to compute their response.
   asio::awaitable<bool> writer(asio::thread_pool& thread_pool) {
+    if (!channel_out) {
+      throw std::logic_error("Empty ChannelOut!");
+    }
     bool ok{true};
     while (ok) {
       asio::error_code ec;
-      auto buffer = co_await channel_out.async_receive(
+      auto buffer = co_await channel_out->async_receive(
           asio::redirect_error(asio::use_awaitable, ec));
       if (ec) {
         gpr_log(GPR_DEBUG, "StreamChannel ChannelOut got closed.");
@@ -206,9 +212,66 @@ struct HsAsioHandler {
   }
 
   asio::awaitable<void>
-  handleBiDiStream(grpc::GenericServerContext& server_context,
-                   grpc::GenericServerAsyncReaderWriter& reader_writer,
-                   server_request_t& request, server_response_t& response) {
+  handleServerStreaming(grpc::GenericServerContext& server_context,
+                        grpc::GenericServerAsyncReaderWriter& reader_writer,
+                        server_request_t& request,
+                        server_response_t& response) {
+    // TODO: let user chooses the maxBufferSize
+    std::size_t maxBufferSize = 8192;
+    ChannelOut channel_out{co_await asio::this_coro::executor, maxBufferSize};
+
+    // Wait for the request message
+    grpc::ByteBuffer buffer;
+    bool read_ok = co_await agrpc::read(reader_writer, buffer);
+    if (!read_ok) {
+      gpr_log(GPR_DEBUG, "Read failed, maybe client is done writing.");
+      co_return;
+    }
+
+    // Dump buffer
+    std::string input;
+    bool dump_ok = byteBufferDumpToString(buffer, input);
+    if (!dump_ok) {
+      gpr_log(GPR_ERROR, "byteBufferDumpToString failed!.");
+      co_await agrpc::finish(
+          reader_writer,
+          grpc::Status(grpc::StatusCode::INTERNAL, "Parsing request failed"));
+      co_return;
+    }
+    // TODO: grpc 1.39+ support DumpToSingleSlice
+    //
+    // grpc::Slice slice;
+    // auto r = buffer.DumpToSingleSlice(&slice);
+    //
+    // request.data = (uint8_t*)slice.begin();
+    // request.data_size = slice.size();
+    request.data = (uint8_t*)input.data();
+    request.data_size = input.size();
+    request.channel_out = &channel_out;
+    request.server_context = &server_context;
+
+    // call haskell handler
+    (*callback)(&request, &response);
+
+    auto streamChannel =
+        StreamChannel{reader_writer, nullptr, &channel_out, response};
+    const auto ok = co_await streamChannel.writer(thread_pool);
+
+    if (channel_out.is_open())
+      channel_out.close();
+
+    if (!ok) {
+      gpr_log(GPR_DEBUG, "Client has disconnected or server is shuttingdown.");
+      co_return;
+    } else {
+      co_await finishGrpc(reader_writer, response);
+    }
+  }
+
+  asio::awaitable<void>
+  handleBidiStreaming(grpc::GenericServerContext& server_context,
+                      grpc::GenericServerAsyncReaderWriter& reader_writer,
+                      server_request_t& request, server_response_t& response) {
     // TODO: let user chooses the maxBufferSize
     std::size_t maxBufferSize = 8192;
     ChannelIn channel_in{co_await asio::this_coro::executor, maxBufferSize};
@@ -225,14 +288,10 @@ struct HsAsioHandler {
 
     using namespace asio::experimental::awaitable_operators;
     auto streamChannel =
-        StreamChannel{reader_writer, channel_in, channel_out, response};
+        StreamChannel{reader_writer, &channel_in, &channel_out, response};
     const auto ok =
         co_await (streamChannel.reader() && streamChannel.writer(thread_pool));
 
-    // FIXME: do we really need this guard?
-    // make sure we close all chennels
-    if (channel_in.is_open())
-      channel_in.close();
     if (channel_out.is_open())
       channel_out.close();
 
@@ -261,8 +320,8 @@ struct HsAsioHandler {
           break;
         }
         case StreamingType::BiDiStreaming: {
-          co_await handleBiDiStream(server_context, reader_writer, request,
-                                    response);
+          co_await handleBidiStreaming(server_context, reader_writer, request,
+                                       response);
           break;
         }
         case StreamingType::ClientStreaming:
@@ -270,8 +329,8 @@ struct HsAsioHandler {
           throw std::logic_error("NotImplemented");
           break;
         case StreamingType::ServerStreaming:
-          // TODO
-          throw std::logic_error("NotImplemented");
+          co_await handleServerStreaming(server_context, reader_writer, request,
+                                         response);
           break;
       } // Let compiler check that all enum values are handled.
     } else {

@@ -1,6 +1,8 @@
-{-# LANGUAGE DataKinds    #-}
-{-# LANGUAGE GADTs        #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE DataKinds              #-}
+{-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs                  #-}
+{-# LANGUAGE TypeFamilies           #-}
 
 module HsGrpc.Server
   ( GRPC (..)
@@ -9,15 +11,19 @@ module HsGrpc.Server
 
     -- * Handlers
   , UnaryHandler
-  , BiDiStreamHandler
+  , ServerStreamHandler
+  , BidiStreamHandler
   , ServiceHandler
   , unary
+  , serverStream
   , bidiStream
   , handlerUseThreadPool
     -- **
-  , BiDiStream
-  , streamRead
-  , streamWrite
+  , InStream
+  , OutStream
+  , BidiStream
+  , StreamInput, streamRead
+  , StreamOutput, streamWrite
 
     -- * Helpers
   , whileM
@@ -123,44 +129,64 @@ runAsioGrpc server handlers onStarted =
 -------------------------------------------------------------------------------
 -- Handlers
 
+newtype InStream i = InStream (Ptr CppChannelIn)
+newtype OutStream o = OutStream (Ptr CppChannelOut)
+newtype BidiStream i o = BidiStream (InStream i, OutStream o)
+
+class Message i => StreamInput i s | s -> i where
+  streamRead :: s -> IO (Maybe i)
+
+instance Message i => StreamInput i (BidiStream i o) where
+  streamRead (BidiStream (i, _)) = streamRead i
+  {-# INLINE streamRead #-}
+
+instance Message i => StreamInput i (InStream i) where
+  streamRead (InStream s) = do
+    m_bs <- readCppChannel s
+    case m_bs of
+      Nothing -> return Nothing
+      Just req ->
+        case decodeMessage req of
+          -- FIXME: Choose another specific exception?
+          Left errmsg -> Ex.throwIO $ ServerException (Text.pack errmsg)
+          Right msg   -> return (Just msg)
+  {-# INLINE streamRead #-}
+
+class Message o => StreamOutput o s | s -> o where
+  streamWrite :: s -> Maybe o -> IO (Either String ())
+
+instance Message o => StreamOutput o (OutStream o) where
+  streamWrite (OutStream s) Nothing = Right <$> closeOutChannel s
+  streamWrite (OutStream s) (Just msg) = do
+    ret <- writeCppChannel s $ encodeMessage msg
+    pure $ if ret == 0 then Right () else Left "writeCppChannel failed"
+  {-# INLINE streamWrite #-}
+
+instance Message o => StreamOutput o (BidiStream i o) where
+  streamWrite (BidiStream (_, o)) = streamWrite o
+  {-# INLINE streamWrite #-}
+
 type UnaryHandler i o = ServerContext -> i -> IO o
-type BiDiStreamHandler i o a = ServerContext -> BiDiStream i o -> IO a
-
-data BiDiStream i o = BiDiStream
-  { bidiReadChannel  :: {-# UNPACK #-}!(Ptr CppChannelIn)
-  , bidiWriteChannel :: {-# UNPACK #-}!(Ptr CppChannelOut)
-  }
-
-streamRead :: Message i => BiDiStream i o -> IO (Maybe i)
-streamRead stream = do
-  m_bs <- readCppChannel $ bidiReadChannel stream
-  case m_bs of
-    Nothing -> return Nothing
-    Just req ->
-      case decodeMessage req of
-        -- FIXME: Choose another specific exception?
-        Left errmsg -> Ex.throwIO $ ServerException (Text.pack errmsg)
-        Right msg   -> return (Just msg)
-
-streamWrite :: Message o => BiDiStream i o -> Maybe o -> IO (Either String ())
-streamWrite stream Nothing = Right <$> closeOutChannel (bidiWriteChannel stream)
-streamWrite stream (Just msg) = do
-  ret <- writeCppChannel (bidiWriteChannel stream) $ encodeMessage msg
-  pure $ if ret == 0 then Right () else Left "writeCppChannel failed"
+type ServerStreamHandler i o a = ServerContext -> i -> OutStream o -> IO a
+type BidiStreamHandler i o a = ServerContext -> BidiStream i o -> IO a
 
 data RpcHandler where
   UnaryHandler
     :: (Message i, Message o) => UnaryHandler i o -> RpcHandler
-  BiDiStreamHandler
-    :: (Message i, Message o) => BiDiStreamHandler i o a -> RpcHandler
+  ServerStreamHandler
+    :: (Message i, Message o) => ServerStreamHandler i o a -> RpcHandler
+  BidiStreamHandler
+    :: (Message i, Message o) => BidiStreamHandler i o a -> RpcHandler
 
 instance Show RpcHandler where
-  show (UnaryHandler _)      = "<UnaryHandler>"
-  show (BiDiStreamHandler _) = "<BiDiStreamHandler>"
+  show (UnaryHandler _)        = "<UnaryHandler>"
+  show (ServerStreamHandler _) = "<ServerStreamHandler>"
+  show (BidiStreamHandler _)   = "<BidiStreamHandler>"
 
 handlerCStreamingType :: RpcHandler -> Word8
-handlerCStreamingType (UnaryHandler _)      = C_StreamingType_NonStreaming
-handlerCStreamingType (BiDiStreamHandler _) = C_StreamingType_BiDiStreaming
+handlerCStreamingType (UnaryHandler _)        = C_StreamingType_NonStreaming
+handlerCStreamingType (ServerStreamHandler _) = C_StreamingType_ServerStreaming
+handlerCStreamingType (BidiStreamHandler _)   = C_StreamingType_BiDiStreaming
 
 data ServiceHandler = ServiceHandler
   { rpcMethod        :: !GrpcMethod
@@ -184,14 +210,25 @@ unary grpc handler =
                 , rpcUseThreadPool = False
                 }
 
+serverStream
+  :: (HasMethod s m, Message i, Message o)
+  => GRPC s m
+  -> ServerStreamHandler i o a
+  -> ServiceHandler
+serverStream grpc handler =
+  ServiceHandler{ rpcMethod = getGrpcMethod grpc
+                , rpcHandler = ServerStreamHandler handler
+                , rpcUseThreadPool = False
+                }
+
 bidiStream
   :: (HasMethod s m, Message i, Message o)
   => GRPC s m
-  -> BiDiStreamHandler i o a
+  -> BidiStreamHandler i o a
   -> ServiceHandler
 bidiStream grpc handler =
   ServiceHandler{ rpcMethod = getGrpcMethod grpc
-                , rpcHandler = BiDiStreamHandler handler
+                , rpcHandler = BidiStreamHandler handler
                 , rpcUseThreadPool = False
                 }
 
@@ -204,7 +241,8 @@ processorCallback handlers request_ptr response_ptr = do
   let handler = handlers !! requestHandlerIdx req   -- TODO: use vector to gain O(1) access
   case handler of
     UnaryHandler hd -> unaryCallback req hd response_ptr
-    BiDiStreamHandler hd -> void $ forkIO $ bidiStreamCallback req hd response_ptr
+    ServerStreamHandler hd -> void $ forkIO $ serverStreamCallback req hd response_ptr
+    BidiStreamHandler hd -> void $ forkIO $ bidiStreamCallback req hd response_ptr
 
 unaryCallback
   :: (Message i, Message o)
@@ -218,18 +256,34 @@ unaryCallback Request{..} hd response_ptr = catchGrpcError response_ptr $ do
       poke response_ptr defResponse{responseData = Just replyBs}
 {-# INLINABLE unaryCallback #-}
 
+serverStreamCallback
+  :: (Message i)
+  => Request
+  -> ServerStreamHandler i o a
+  -> Ptr Response
+  -> IO ()
+serverStreamCallback Request{..} hd response_ptr =
+  let stream = OutStream requestWriteChannel
+      e_requestMsg = decodeMessage requestPayload
+      action =
+        case e_requestMsg of
+          Left errmsg      -> parsingReqErrReply response_ptr (BSC.pack errmsg)
+          Right requestMsg -> void $ hd requestServerContext requestMsg stream
+      clean = closeOutChannel requestWriteChannel
+   in void $ catchGrpcError' response_ptr clean action
+
 -- TODO: before we close all channels, we should wait WriteChannel to flush all.
 bidiStreamCallback
   :: Request
-  -> BiDiStreamHandler i o a
+  -> BidiStreamHandler i o a
   -> Ptr Response
   -> IO ()
 bidiStreamCallback req hd response_ptr =
-  let stream = BiDiStream (requestReadChannel req) (requestWriteChannel req)
+  let readerChan = requestReadChannel req
+      writerChan = requestWriteChannel req
+      stream = BidiStream (InStream readerChan, OutStream writerChan)
       action = void $ hd (requestServerContext req) stream
-      clean = do
-        closeOutChannel $ bidiWriteChannel stream
-        closeInChannel $ bidiReadChannel stream
+      clean = closeOutChannel writerChan >> closeInChannel readerChan
    in void $ catchGrpcError' response_ptr clean action
 
 -------------------------------------------------------------------------------
