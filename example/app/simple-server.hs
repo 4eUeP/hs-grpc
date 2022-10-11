@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
@@ -6,6 +7,7 @@ module Main where
 import           Control.Concurrent      (threadDelay)
 import           Data.Either             (isRight)
 import           Data.ProtoLens          (defMessage)
+import qualified Data.Text               as Text
 import           Lens.Micro
 
 import           HsGrpc.Common.Log
@@ -14,17 +16,32 @@ import           Proto.Helloworld        as P
 import           Proto.Helloworld_Fields as P
 
 handlers :: [ServiceHandler]
-handlers = [ unary (GRPC :: GRPC P.Greeter "echo") handleEcho
-           , unary (GRPC :: GRPC P.Greeter "sayHello") handleSayHello
-           , serverStream (GRPC :: GRPC P.Greeter "sayHelloServerStream") handleServerStreamSayHello
-           , bidiStream (GRPC :: GRPC P.Greeter "sayHelloBiDiStream") handleBidiSayHello
-           ]
+handlers =
+  [ unary (GRPC :: GRPC P.Greeter "echo") handleEcho
+  , unary (GRPC :: GRPC P.Greeter "sayHello") handleSayHello
+  , clientStream (GRPC :: GRPC P.Greeter "sayHelloClientStream") handleClientStreamSayHello
+  , serverStream (GRPC :: GRPC P.Greeter "sayHelloServerStream") handleServerStreamSayHello
+  , bidiStream (GRPC :: GRPC P.Greeter "sayHelloBiDiStream") handleBidiSayHello
+  ]
 
 handleEcho :: UnaryHandler P.EchoMsg P.EchoMsg
 handleEcho _ctx = pure
 
 handleSayHello :: UnaryHandler P.HelloRequest P.HelloReply
 handleSayHello _ctx req = pure $ defMessage & P.msg .~ (req ^. P.name)
+
+handleClientStreamSayHello :: ClientStreamHandler P.HelloRequest P.HelloReply
+handleClientStreamSayHello _ctx stream = go (0 :: Int)
+  where
+    go n = do
+      m_req <- streamRead stream
+      case m_req of
+        Just req -> do
+          putStrLn $ "Recv client request " <> show req
+          go $! (n + 1)
+        Nothing -> do
+          let reply = "Received " <> Text.pack (show n) <> " requests."
+          pure $ defMessage & P.msg .~ reply
 
 handleServerStreamSayHello :: ServerStreamHandler P.HelloRequest P.HelloReply ()
 handleServerStreamSayHello _ctx req stream = do

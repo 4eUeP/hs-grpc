@@ -18,8 +18,8 @@ extra-source-files:
 
 custom-setup
   setup-depends:
-    , base              >=4.5  && <5
-    , Cabal             >=2.4  && <4
+    , base              >=4.5 && <5
+    , Cabal             >=2.4 && <4
     , proto-lens-setup  ^>=0.4
 
 executable simple-server
@@ -32,6 +32,7 @@ executable simple-server
     , microlens
     , proto-lens
     , proto-lens-runtime
+    , text
 
   other-modules:
     Proto.Helloworld

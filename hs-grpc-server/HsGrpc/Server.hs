@@ -11,10 +11,12 @@ module HsGrpc.Server
 
     -- * Handlers
   , UnaryHandler
+  , ClientStreamHandler
   , ServerStreamHandler
   , BidiStreamHandler
   , ServiceHandler
   , unary
+  , clientStream
   , serverStream
   , bidiStream
   , handlerUseThreadPool
@@ -38,7 +40,7 @@ module HsGrpc.Server
 import           Control.Concurrent            (forkIO)
 import qualified Control.Concurrent.Async      as Async
 import qualified Control.Exception             as Ex
-import           Control.Monad                 (void, when)
+import           Control.Monad                 (unless, void, when)
 import           Data.ByteString               (ByteString)
 import qualified Data.ByteString.Char8         as BSC
 import           Data.ByteString.Short         (ShortByteString)
@@ -147,9 +149,10 @@ instance Message i => StreamInput i (InStream i) where
       Nothing -> return Nothing
       Just req ->
         case decodeMessage req of
-          -- FIXME: Choose another specific exception?
-          Left errmsg -> Ex.throwIO $ ServerException (Text.pack errmsg)
-          Right msg   -> return (Just msg)
+          Left errmsg ->
+            let x = "streamRead decoding request failed: " <> BSC.pack errmsg
+             in throwGrpcError $ GrpcStatus StatusInternal (Just x) Nothing
+          Right msg -> return (Just msg)
   {-# INLINE streamRead #-}
 
 class Message o => StreamOutput o s | s -> o where
@@ -167,12 +170,15 @@ instance Message o => StreamOutput o (BidiStream i o) where
   {-# INLINE streamWrite #-}
 
 type UnaryHandler i o = ServerContext -> i -> IO o
+type ClientStreamHandler i o = ServerContext -> InStream i -> IO o
 type ServerStreamHandler i o a = ServerContext -> i -> OutStream o -> IO a
 type BidiStreamHandler i o a = ServerContext -> BidiStream i o -> IO a
 
 data RpcHandler where
   UnaryHandler
     :: (Message i, Message o) => UnaryHandler i o -> RpcHandler
+  ClientStreamHandler
+    :: (Message i, Message o) => ClientStreamHandler i o -> RpcHandler
   ServerStreamHandler
     :: (Message i, Message o) => ServerStreamHandler i o a -> RpcHandler
   BidiStreamHandler
@@ -180,11 +186,13 @@ data RpcHandler where
 
 instance Show RpcHandler where
   show (UnaryHandler _)        = "<UnaryHandler>"
+  show (ClientStreamHandler _) = "<ClientStreamHandler>"
   show (ServerStreamHandler _) = "<ServerStreamHandler>"
   show (BidiStreamHandler _)   = "<BidiStreamHandler>"
 
 handlerCStreamingType :: RpcHandler -> Word8
 handlerCStreamingType (UnaryHandler _)        = C_StreamingType_NonStreaming
+handlerCStreamingType (ClientStreamHandler _) = C_StreamingType_ClientStreaming
 handlerCStreamingType (ServerStreamHandler _) = C_StreamingType_ServerStreaming
 handlerCStreamingType (BidiStreamHandler _)   = C_StreamingType_BiDiStreaming
 
@@ -207,6 +215,17 @@ unary
 unary grpc handler =
   ServiceHandler{ rpcMethod = getGrpcMethod grpc
                 , rpcHandler = UnaryHandler handler
+                , rpcUseThreadPool = False
+                }
+
+clientStream
+  :: (HasMethod s m, Message i, Message o)
+  => GRPC s m
+  -> ClientStreamHandler i o
+  -> ServiceHandler
+clientStream grpc handler =
+  ServiceHandler{ rpcMethod = getGrpcMethod grpc
+                , rpcHandler = ClientStreamHandler handler
                 , rpcUseThreadPool = False
                 }
 
@@ -241,6 +260,7 @@ processorCallback handlers request_ptr response_ptr = do
   let handler = handlers !! requestHandlerIdx req   -- TODO: use vector to gain O(1) access
   case handler of
     UnaryHandler hd -> unaryCallback req hd response_ptr
+    ClientStreamHandler hd -> void $ forkIO $ clientStreamCallback req hd response_ptr
     ServerStreamHandler hd -> void $ forkIO $ serverStreamCallback req hd response_ptr
     BidiStreamHandler hd -> void $ forkIO $ bidiStreamCallback req hd response_ptr
 
@@ -255,6 +275,20 @@ unaryCallback Request{..} hd response_ptr = catchGrpcError response_ptr $ do
       replyBs <- encodeMessage <$> hd requestServerContext requestMsg
       poke response_ptr defResponse{responseData = Just replyBs}
 {-# INLINABLE unaryCallback #-}
+
+clientStreamCallback
+  :: (Message o)
+  => Request -> ClientStreamHandler i o -> Ptr Response -> IO ()
+clientStreamCallback Request{..} hd response_ptr =
+  let stream = InStream requestReadChannel
+      action = do
+        replyBs <- encodeMessage <$> hd requestServerContext stream
+        -- NOTE: requestWriteChannel is closed on the cpp side
+        ret <- writeCppChannel requestWriteChannel replyBs
+        unless (ret == 0) $ Ex.throwIO $
+          ServerException "Unexpected happened, send client streaming response failed!"
+      clean = closeInChannel requestReadChannel
+   in void $ catchGrpcError' response_ptr clean action
 
 serverStreamCallback
   :: (Message i)

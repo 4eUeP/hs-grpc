@@ -212,6 +212,50 @@ struct HsAsioHandler {
   }
 
   asio::awaitable<void>
+  handleClientStreaming(grpc::GenericServerContext& server_context,
+                        grpc::GenericServerAsyncReaderWriter& reader_writer,
+                        server_request_t& request,
+                        server_response_t& response) {
+    // TODO: let user chooses the maxBufferSize
+    std::size_t maxBufferSize = 8192;
+    ChannelIn channel_in{co_await asio::this_coro::executor, maxBufferSize};
+    // FIXME: use a lightweight structure instead (just like a async mvar?)
+    ChannelOut channel_out{co_await asio::this_coro::executor, 1};
+
+    request.data = nullptr;
+    request.data_size = 0;
+    request.channel_in = &channel_in;
+    request.channel_out = &channel_out;
+    request.server_context = &server_context;
+
+    // call haskell handler
+    (*callback)(&request, &response);
+
+    auto streamChannel =
+        StreamChannel{reader_writer, &channel_in, nullptr, response};
+    co_await streamChannel.reader();
+
+    asio::error_code ec;
+    auto buffer = co_await channel_out.async_receive(
+        asio::redirect_error(asio::use_awaitable, ec));
+    if (ec) {
+      gpr_log(GPR_ERROR,
+              "Unexpected happened. ClientStreaming failed to get response.");
+      co_return;
+    }
+    channel_out.close();
+
+    // Return to client
+    auto status_code = static_cast<grpc::StatusCode>(response.status_code);
+    if (status_code == grpc::StatusCode::OK) {
+      co_await agrpc::write_and_finish(reader_writer, buffer,
+                                       grpc::WriteOptions{}, grpc::Status::OK);
+    } else {
+      co_await agrpc::finish(reader_writer, consErrReplyStatus(response));
+    }
+  }
+
+  asio::awaitable<void>
   handleServerStreaming(grpc::GenericServerContext& server_context,
                         grpc::GenericServerAsyncReaderWriter& reader_writer,
                         server_request_t& request,
@@ -325,8 +369,8 @@ struct HsAsioHandler {
           break;
         }
         case StreamingType::ClientStreaming:
-          // TODO
-          throw std::logic_error("NotImplemented");
+          co_await handleClientStreaming(server_context, reader_writer, request,
+                                         response);
           break;
         case StreamingType::ServerStreaming:
           co_await handleServerStreaming(server_context, reader_writer, request,
