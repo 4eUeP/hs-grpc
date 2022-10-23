@@ -78,6 +78,7 @@ import           Data.Word                     (Word64, Word8)
 import           Foreign.Marshal.Alloc         (allocaBytesAligned)
 import           Foreign.Ptr                   (FunPtr, Ptr, freeHaskellFunPtr,
                                                 nullPtr)
+import           Foreign.StablePtr             (castPtrToStablePtr)
 import           Foreign.Storable              (Storable (..))
 import qualified HsForeign                     as HF
 
@@ -156,6 +157,7 @@ instance Storable Request where
                     , requestServerContext = ServerContext serverContext
                     }
   poke ptr Request{..} = do
+    -- TODO: use HF.newStablePtrByteString
     (data_ptr, data_size) <- HF.mallocFromByteString requestPayload
     (#poke hsgrpc::server_request_t, data) ptr data_ptr
     (#poke hsgrpc::server_request_t, data_size) ptr data_size
@@ -202,9 +204,13 @@ instance Storable Response where
                      , responseErrorDetails = error_details
                      }
   poke ptr Response{..} = do
-    (data_ptr, data_size) <- HF.mallocFromMaybeByteString responseData
+    (data_ptr, data_size, data_sp) <-
+      case responseData of
+        Just bs -> HF.newStablePtrByteString bs
+        Nothing -> pure (nullPtr, 0, castPtrToStablePtr nullPtr)
     (#poke hsgrpc::server_response_t, data) ptr data_ptr
     (#poke hsgrpc::server_response_t, data_size) ptr data_size
+    (#poke hsgrpc::server_response_t, data_sp) ptr data_sp
     (#poke hsgrpc::server_response_t, status_code) ptr (unStatusCode responseStatusCode)
     errmsg_ptr <- maybeNewStdString responseErrorMsg
     (#poke hsgrpc::server_response_t, error_msg) ptr errmsg_ptr

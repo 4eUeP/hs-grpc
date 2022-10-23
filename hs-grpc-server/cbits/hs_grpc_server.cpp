@@ -199,7 +199,8 @@ struct HsAsioHandler {
     if (status_code == grpc::StatusCode::OK) {
       if (response.data) { // can be nullptr
         auto replySlice = grpc::Slice(response.data, response.data_size);
-        std::free(response.data);
+        hs_free_stable_ptr(response.data_sp);
+        // std::free(response.data);
         co_await agrpc::write_and_finish(
             reader_writer, grpc::ByteBuffer(&replySlice, 1),
             grpc::WriteOptions{}, grpc::Status::OK);

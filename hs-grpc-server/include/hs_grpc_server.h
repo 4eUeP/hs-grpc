@@ -51,6 +51,7 @@ struct server_request_t {
 struct server_response_t {
   uint8_t* data;
   size_t data_size;
+  HsStablePtr data_sp;
   HsInt status_code = GRPC_STATUS_OK;
   std::string* error_msg = nullptr;
   std::string* error_details = nullptr;
