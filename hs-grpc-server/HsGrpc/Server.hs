@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns           #-}
 {-# LANGUAGE DataKinds              #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -45,6 +46,7 @@ import           Data.ByteString               (ByteString)
 import qualified Data.ByteString.Char8         as BSC
 import           Data.ByteString.Short         (ShortByteString)
 import           Data.Kind                     (Type)
+import           Data.Maybe                    (fromMaybe)
 import           Data.ProtoLens.Service.Types  (HasMethod, MethodName,
                                                 Service (..))
 import           Data.Proxy                    (Proxy (..))
@@ -131,8 +133,8 @@ runAsioGrpc server handlers onStarted =
 -------------------------------------------------------------------------------
 -- Handlers
 
-newtype InStream i = InStream (Ptr CppChannelIn)
-newtype OutStream o = OutStream (Ptr CppChannelOut)
+newtype InStream i = InStream ChannelIn
+newtype OutStream o = OutStream ChannelOut
 newtype BidiStream i o = BidiStream (InStream i, OutStream o)
 
 class Message i => StreamInput i s | s -> i where
@@ -144,7 +146,7 @@ instance Message i => StreamInput i (BidiStream i o) where
 
 instance Message i => StreamInput i (InStream i) where
   streamRead (InStream s) = do
-    m_bs <- readCppChannel s
+    m_bs <- readChannel s
     case m_bs of
       Nothing -> return Nothing
       Just req ->
@@ -161,8 +163,8 @@ class Message o => StreamOutput o s | s -> o where
 instance Message o => StreamOutput o (OutStream o) where
   streamWrite (OutStream s) Nothing = Right <$> closeOutChannel s
   streamWrite (OutStream s) (Just msg) = do
-    ret <- writeCppChannel s $ encodeMessage msg
-    pure $ if ret == 0 then Right () else Left "writeCppChannel failed"
+    ret <- writeChannel s $ encodeMessage msg
+    pure $ if ret == 0 then Right () else Left "writeChannel failed"
   {-# INLINE streamWrite #-}
 
 instance Message o => StreamOutput o (BidiStream i o) where
@@ -280,14 +282,16 @@ clientStreamCallback
   :: (Message o)
   => Request -> ClientStreamHandler i o -> Ptr Response -> IO ()
 clientStreamCallback Request{..} hd response_ptr =
-  let stream = InStream requestReadChannel
+  let !readerChan = fromMaybe (error x) requestReadChannel
+      !writerChan = fromMaybe (error x) requestWriteChannel
+      x = "LogicError: This should never happen, call client stream with empty channel!"
       action = do
-        replyBs <- encodeMessage <$> hd requestServerContext stream
+        replyBs <- encodeMessage <$> hd requestServerContext (InStream readerChan)
         -- NOTE: requestWriteChannel is closed on the cpp side
-        ret <- writeCppChannel requestWriteChannel replyBs
+        ret <- writeChannel writerChan replyBs
         unless (ret == 0) $ Ex.throwIO $
           ServerException "Unexpected happened, send client streaming response failed!"
-      clean = closeInChannel requestReadChannel
+      clean = closeInChannel readerChan
    in void $ catchGrpcError' response_ptr clean action
 
 serverStreamCallback
@@ -297,13 +301,15 @@ serverStreamCallback
   -> Ptr Response
   -> IO ()
 serverStreamCallback Request{..} hd response_ptr =
-  let stream = OutStream requestWriteChannel
+  let !writerChan = fromMaybe (error x) requestWriteChannel
+      x = "LogicError: This should never happen, call server stream with empty channel!"
+      stream = OutStream writerChan
       e_requestMsg = decodeMessage requestPayload
       action =
         case e_requestMsg of
           Left errmsg      -> parsingReqErrReply response_ptr (BSC.pack errmsg)
           Right requestMsg -> void $ hd requestServerContext requestMsg stream
-      clean = closeOutChannel requestWriteChannel
+      clean = closeOutChannel writerChan
    in void $ catchGrpcError' response_ptr clean action
 
 -- TODO: before we close all channels, we should wait WriteChannel to flush all.
@@ -313,11 +319,13 @@ bidiStreamCallback
   -> Ptr Response
   -> IO ()
 bidiStreamCallback req hd response_ptr =
-  let readerChan = requestReadChannel req
-      writerChan = requestWriteChannel req
+  let !readerChan = fromMaybe (error x) (requestReadChannel req)
+      !writerChan = fromMaybe (error x) (requestWriteChannel req)
+      x = "LogicError: This should never happen, call bidi stream with empty channel!"
       stream = BidiStream (InStream readerChan, OutStream writerChan)
       action = void $ hd (requestServerContext req) stream
-      clean = closeOutChannel writerChan >> closeInChannel readerChan
+      -- We only need to close OutChannel
+      clean = closeOutChannel writerChan
    in void $ catchGrpcError' response_ptr clean action
 
 -------------------------------------------------------------------------------

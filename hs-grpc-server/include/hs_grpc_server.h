@@ -16,6 +16,14 @@ using ChannelIn =
 using ChannelOut = asio::experimental::concurrent_channel<void(
     asio::error_code, grpc::ByteBuffer)>;
 
+struct channel_in_t {
+  std::shared_ptr<ChannelIn> rep;
+};
+
+struct channel_out_t {
+  std::shared_ptr<ChannelOut> rep;
+};
+
 enum class StreamingType : uint8_t {
   NonStreaming = 1,
   ClientStreaming,
@@ -43,8 +51,8 @@ struct server_request_t {
   uint8_t* data;
   size_t data_size;
   HsInt handler_idx;
-  ChannelIn* channel_in = nullptr;
-  ChannelOut* channel_out = nullptr;
+  channel_in_t* channel_in = nullptr;
+  channel_out_t* channel_out = nullptr;
   grpc::GenericServerContext* server_context = nullptr;
 };
 

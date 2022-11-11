@@ -218,32 +218,38 @@ struct HsAsioHandler {
                         server_response_t& response) {
     // TODO: let user chooses the maxBufferSize
     std::size_t maxBufferSize = 8192;
-    ChannelIn channel_in{co_await asio::this_coro::executor, maxBufferSize};
+
+    auto cpp_channel_in = std::make_shared<ChannelIn>(
+        co_await asio::this_coro::executor, maxBufferSize);
+    auto hs_channel_in = new channel_in_t{cpp_channel_in};
     // FIXME: use a lightweight structure instead (just like a async mvar?)
-    ChannelOut channel_out{co_await asio::this_coro::executor, 1};
+    auto cpp_channel_out =
+        std::make_shared<ChannelOut>(co_await asio::this_coro::executor, 1);
+    auto hs_channel_out = new channel_out_t{cpp_channel_out};
 
     request.data = nullptr;
     request.data_size = 0;
-    request.channel_in = &channel_in;
-    request.channel_out = &channel_out;
+    request.channel_in = hs_channel_in;
+    request.channel_out = hs_channel_out;
     request.server_context = &server_context;
 
     // call haskell handler
     (*callback)(&request, &response);
 
+    // Pass the stored pointer to StreamChannel
     auto streamChannel =
-        StreamChannel{reader_writer, &channel_in, nullptr, response};
+        StreamChannel{reader_writer, cpp_channel_in.get(), nullptr, response};
     co_await streamChannel.reader();
 
     asio::error_code ec;
-    auto buffer = co_await channel_out.async_receive(
+    auto buffer = co_await cpp_channel_out->async_receive(
         asio::redirect_error(asio::use_awaitable, ec));
     if (ec) {
       gpr_log(GPR_ERROR,
               "Unexpected happened. ClientStreaming failed to get response.");
       co_return;
     }
-    channel_out.close();
+    cpp_channel_out->close();
 
     // Return to client
     auto status_code = static_cast<grpc::StatusCode>(response.status_code);
@@ -262,7 +268,9 @@ struct HsAsioHandler {
                         server_response_t& response) {
     // TODO: let user chooses the maxBufferSize
     std::size_t maxBufferSize = 8192;
-    ChannelOut channel_out{co_await asio::this_coro::executor, maxBufferSize};
+    auto cpp_channel_out = std::make_shared<ChannelOut>(
+        co_await asio::this_coro::executor, maxBufferSize);
+    auto hs_channel_out = new channel_out_t{cpp_channel_out};
 
     // Wait for the request message
     grpc::ByteBuffer buffer;
@@ -291,18 +299,18 @@ struct HsAsioHandler {
     // request.data_size = slice.size();
     request.data = (uint8_t*)input.data();
     request.data_size = input.size();
-    request.channel_out = &channel_out;
+    request.channel_out = hs_channel_out;
     request.server_context = &server_context;
 
     // call haskell handler
     (*callback)(&request, &response);
 
     auto streamChannel =
-        StreamChannel{reader_writer, nullptr, &channel_out, response};
+        StreamChannel{reader_writer, nullptr, cpp_channel_out.get(), response};
     const auto ok = co_await streamChannel.writer(thread_pool);
 
-    if (channel_out.is_open())
-      channel_out.close();
+    if (cpp_channel_out->is_open())
+      cpp_channel_out->close();
 
     if (!ok) {
       gpr_log(GPR_DEBUG, "Client has disconnected or server is shuttingdown.");
@@ -318,26 +326,38 @@ struct HsAsioHandler {
                       server_request_t& request, server_response_t& response) {
     // TODO: let user chooses the maxBufferSize
     std::size_t maxBufferSize = 8192;
-    ChannelIn channel_in{co_await asio::this_coro::executor, maxBufferSize};
-    ChannelOut channel_out{co_await asio::this_coro::executor, maxBufferSize};
+
+    // NOTE: There are two refs to the shared_ptr, one is handleBidiStreaming
+    // function on the cpp side, another is the haskell side. Thus, the stored
+    // obj in the shared_ptr is freed while both handleBidiStreaming and haskell
+    // ForeignPtr are exited.
+    auto cpp_channel_in = std::make_shared<ChannelIn>(
+        co_await asio::this_coro::executor, maxBufferSize);
+    auto cpp_channel_out = std::make_shared<ChannelOut>(
+        co_await asio::this_coro::executor, maxBufferSize);
+    auto hs_channel_in =
+        new channel_in_t{cpp_channel_in}; // delete by haskell gc
+    auto hs_channel_out =
+        new channel_out_t{cpp_channel_out}; // delete by haskell gc
 
     request.data = nullptr;
     request.data_size = 0;
-    request.channel_in = &channel_in;
-    request.channel_out = &channel_out;
+    request.channel_in = hs_channel_in;
+    request.channel_out = hs_channel_out;
     request.server_context = &server_context;
 
     // pass initial datas to haskell
     (*callback)(&request, &response);
 
     using namespace asio::experimental::awaitable_operators;
-    auto streamChannel =
-        StreamChannel{reader_writer, &channel_in, &channel_out, response};
+    // Pass the stored pointer to StreamChannel
+    auto streamChannel = StreamChannel{reader_writer, cpp_channel_in.get(),
+                                       cpp_channel_out.get(), response};
     const auto ok =
         co_await (streamChannel.reader() && streamChannel.writer(thread_pool));
 
-    if (channel_out.is_open())
-      channel_out.close();
+    if (cpp_channel_out->is_open())
+      cpp_channel_out->close();
 
     if (!ok) {
       gpr_log(GPR_DEBUG, "Client has disconnected or server is shuttingdown.");
@@ -513,34 +533,45 @@ void delete_asio_server(CppAsioServer* server) {
   delete server;
 }
 
-void read_channel(hsgrpc::ChannelIn* channel, HsStablePtr mvar, HsInt cap,
+// ----------------------------------------------------------------------------
+// Async channel
+
+void read_channel(hsgrpc::channel_in_t* channel, HsStablePtr mvar, HsInt cap,
                   hsgrpc::read_channel_cb_data_t* cb_data) {
-  channel->async_receive(
+  channel->rep->async_receive(
       [mvar, cap, cb_data](asio::error_code ec, std::string&& buf) {
         if (cb_data) {
           cb_data->ec = (HsInt)ec.value();
-          cb_data->buf = new std::string(buf); // delete on haskell side
+          if (cb_data->ec == 0) {                // success
+            cb_data->buf = new std::string(buf); // delete on haskell side
+          }
         }
         hs_try_putmvar(cap, mvar);
       });
 }
 
-void write_channel(hsgrpc::ChannelOut* channel, const char* payload,
+void write_channel(hsgrpc::channel_out_t* channel, const char* payload,
                    HsInt offset, HsInt length, HsStablePtr mvar, HsInt cap,
                    HsInt* ret_code) {
   auto replySlice = grpc::Slice(payload + offset, length); // copy constructor?
   // Also copy constructor? FIXME: does this means to be copied twice?
   auto reply = grpc::ByteBuffer(&replySlice, 1);
-  channel->async_send(asio::error_code{}, std::move(reply),
-                      [cap, mvar, ret_code](asio::error_code ec) {
-                        *ret_code = (HsInt)ec.value();
-                        hs_try_putmvar(cap, mvar);
-                      });
+  channel->rep->async_send(asio::error_code{}, std::move(reply),
+                           [cap, mvar, ret_code](asio::error_code ec) {
+                             *ret_code = (HsInt)ec.value();
+                             hs_try_putmvar(cap, mvar);
+                           });
 }
 
-void close_in_channel(hsgrpc::ChannelIn* channel) { channel->close(); }
+void close_in_channel(hsgrpc::channel_out_t* channel) { channel->rep->close(); }
 
-void close_out_channel(hsgrpc::ChannelOut* channel) { channel->close(); }
+void delete_in_channel(hsgrpc::channel_in_t* channel) { delete channel; }
+
+void close_out_channel(hsgrpc::channel_out_t* channel) {
+  channel->rep->close();
+}
+
+void delete_out_channel(hsgrpc::channel_out_t* channel) { delete channel; }
 
 // ----------------------------------------------------------------------------
 } // End extern "C"

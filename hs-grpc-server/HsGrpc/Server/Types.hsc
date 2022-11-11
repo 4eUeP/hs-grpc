@@ -126,8 +126,8 @@ withProcessorCallback cb = bracket (mkProcessorCallback cb) freeHaskellFunPtr
 data Request = Request
   { requestPayload       :: ByteString
   , requestHandlerIdx    :: Int
-  , requestReadChannel   :: Ptr CppChannelIn
-  , requestWriteChannel  :: Ptr CppChannelOut
+  , requestReadChannel   :: Maybe ChannelIn
+  , requestWriteChannel  :: Maybe ChannelOut
   , requestServerContext :: ServerContext
   } deriving (Show)
 
@@ -146,8 +146,10 @@ instance Storable Request where
     --
     -- BS.unsafePackCStringLen (nullPtr, 0) === ""
     payload <- BS.unsafePackCStringLen (data_ptr, fromIntegral data_size)
-    channelIn <- (#peek hsgrpc::server_request_t, channel_in) ptr
-    channelOut <- (#peek hsgrpc::server_request_t, channel_out) ptr
+    channelIn <- peekMaybeCppChannelIn =<<
+      (#peek hsgrpc::server_request_t, channel_in) ptr
+    channelOut <- peekMaybeCppChannelOut =<<
+      (#peek hsgrpc::server_request_t, channel_out) ptr
     serverContext <- (#peek hsgrpc::server_request_t, server_context) ptr
     return $ Request{ requestPayload       = payload
                     , requestHandlerIdx    = handleIdx
@@ -155,13 +157,7 @@ instance Storable Request where
                     , requestWriteChannel  = channelOut
                     , requestServerContext = ServerContext serverContext
                     }
-  poke ptr Request{..} = do
-    (data_ptr, data_size) <- HF.mallocFromByteString requestPayload
-    (#poke hsgrpc::server_request_t, data) ptr data_ptr
-    (#poke hsgrpc::server_request_t, data_size) ptr data_size
-    (#poke hsgrpc::server_request_t, channel_in) ptr requestReadChannel
-    (#poke hsgrpc::server_request_t, channel_out) ptr requestWriteChannel
-    (#poke hsgrpc::server_request_t, server_context) ptr (unServerContext requestServerContext)
+  poke _ptr _req = error "Request is not pokeable"
 
 data Response = Response
   { responseData         :: Maybe ByteString

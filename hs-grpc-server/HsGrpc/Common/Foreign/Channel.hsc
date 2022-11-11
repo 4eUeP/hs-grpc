@@ -1,8 +1,12 @@
 module HsGrpc.Common.Foreign.Channel
   ( CppChannelIn
   , CppChannelOut
-  , readCppChannel
-  , writeCppChannel
+  , ChannelIn
+  , ChannelOut
+  , peekMaybeCppChannelIn
+  , peekMaybeCppChannelOut
+  , readChannel
+  , writeChannel
   , closeOutChannel
   , closeInChannel
   ) where
@@ -12,6 +16,7 @@ import qualified Data.ByteString.Internal as BS
 import           Data.Primitive
 import           Data.Word
 import           Foreign.ForeignPtr
+import           Foreign.Ptr              (FunPtr, nullPtr)
 import           Foreign.StablePtr        (StablePtr)
 import           Foreign.Storable
 import           GHC.Conc
@@ -22,17 +27,37 @@ import           HsForeign                (unsafePeekStdString, withAsyncFFI,
 
 -------------------------------------------------------------------------------
 
-data CppChannelIn
-data CppChannelOut
+data CppChannelIn   -- channel_in_t
+data CppChannelOut  -- channel_out_t
 
-readCppChannel :: Ptr CppChannelIn -> IO (Maybe ByteString)
-readCppChannel ptr =
-  channelCbDataBuf <$> withAsyncFFI channelCbDataSize peekChannelCbData (read_channel ptr)
+type ChannelIn = ForeignPtr CppChannelIn
+type ChannelOut = ForeignPtr CppChannelOut
 
-writeCppChannel :: Ptr CppChannelOut -> ByteString -> IO Int
-writeCppChannel ptr (BS.PS bs offset len) =
+peekMaybeCppChannelIn :: Ptr CppChannelIn -> IO (Maybe ChannelIn)
+peekMaybeCppChannelIn ptr =
+  if ptr == nullPtr then pure Nothing
+                    else Just <$> newForeignPtr delete_in_channel_fun ptr
+
+peekMaybeCppChannelOut :: Ptr CppChannelOut -> IO (Maybe ChannelOut)
+peekMaybeCppChannelOut ptr =
+  if ptr == nullPtr then pure Nothing
+                    else Just <$> newForeignPtr delete_out_channel_fun ptr
+
+readChannel :: ChannelIn -> IO (Maybe ByteString)
+readChannel chan = withForeignPtr chan $ \ptr -> channelCbDataBuf <$>
+  withAsyncFFI channelCbDataSize peekChannelCbData (read_channel ptr)
+
+writeChannel :: ChannelOut -> ByteString -> IO Int
+writeChannel chan (BS.PS bs offset len) =
+  withForeignPtr chan $ \ptr ->
   withForeignPtr bs $ \bs' -> do
     withPrimAsyncFFI @Int (write_channel ptr bs' offset len)
+
+closeInChannel :: ChannelIn -> IO ()
+closeInChannel chan = withForeignPtr chan close_in_channel
+
+closeOutChannel :: ChannelOut -> IO ()
+closeOutChannel chan = withForeignPtr chan close_out_channel
 
 foreign import ccall unsafe "write_channel"
   write_channel
@@ -49,11 +74,17 @@ foreign import ccall unsafe "read_channel"
     -> Ptr ChannelCbData
     -> IO ()
 
-foreign import ccall unsafe "close_out_channel"
-  closeOutChannel :: Ptr CppChannelOut -> IO ()
-
 foreign import ccall unsafe "close_in_channel"
-  closeInChannel :: Ptr CppChannelIn -> IO ()
+  close_in_channel :: Ptr CppChannelIn -> IO ()
+
+foreign import ccall unsafe "&delete_in_channel"
+  delete_in_channel_fun :: FunPtr (Ptr CppChannelIn -> IO ())
+
+foreign import ccall unsafe "close_out_channel"
+  close_out_channel :: Ptr CppChannelOut -> IO ()
+
+foreign import ccall unsafe "&delete_out_channel"
+  delete_out_channel_fun :: FunPtr (Ptr CppChannelOut -> IO ())
 
 -------------------------------------------------------------------------------
 
