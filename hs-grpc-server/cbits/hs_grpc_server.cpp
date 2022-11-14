@@ -104,9 +104,7 @@ struct StreamChannel {
     gpr_log(GPR_DEBUG, "Exit StreamChannel reader");
   }
 
-  // The writer will pick up reads from the reader through the channel and
-  // switch to the thread_pool to compute their response.
-  asio::awaitable<bool> writer(asio::thread_pool& thread_pool) {
+  asio::awaitable<bool> writer() {
     if (!channel_out) {
       throw std::logic_error("Empty ChannelOut!");
     }
@@ -120,11 +118,6 @@ struct StreamChannel {
         ok = false;
         break;
       }
-      // switch to the thread_pool
-      co_await asio::post(
-          asio::bind_executor(thread_pool, asio::use_awaitable));
-      // reader_writer is thread-safe so we can just interact with it from the
-      // thread_pool.
       ok = co_await agrpc::write(reader_writer, buffer, asio::use_awaitable);
       // Now we are back on the main thread.
     }
@@ -307,7 +300,7 @@ struct HsAsioHandler {
 
     auto streamChannel =
         StreamChannel{reader_writer, nullptr, cpp_channel_out.get(), response};
-    const auto ok = co_await streamChannel.writer(thread_pool);
+    const auto ok = co_await streamChannel.writer();
 
     if (cpp_channel_out->is_open())
       cpp_channel_out->close();
@@ -353,8 +346,7 @@ struct HsAsioHandler {
     // Pass the stored pointer to StreamChannel
     auto streamChannel = StreamChannel{reader_writer, cpp_channel_in.get(),
                                        cpp_channel_out.get(), response};
-    const auto ok =
-        co_await (streamChannel.reader() && streamChannel.writer(thread_pool));
+    const auto ok = co_await (streamChannel.reader() && streamChannel.writer());
 
     if (cpp_channel_out->is_open())
       cpp_channel_out->close();
@@ -503,10 +495,11 @@ void run_asio_server(CppAsioServer* server,
   }
 
   auto parallelism = server->server_threads_.capacity();
+  // TODO: server opts to change number of threads
+  asio::thread_pool thread_pool{parallelism};
   for (size_t i = 0; i < parallelism; ++i) {
     server->server_threads_.emplace_back([&, i] {
       auto& grpc_context = *std::next(server->grpc_contexts_.begin(), i);
-      asio::thread_pool thread_pool{1};
       agrpc::repeatedly_request(
           server->service_,
           asio::bind_executor(grpc_context,
