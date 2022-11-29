@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        ghc: ['8.10']
+        ghc: ['8.10.7', '9.2.5']
         cabal: ['3.6']
         grpc: ['v1.35.0']
         os: [ubuntu-latest]  # TODO: macOS-latest
