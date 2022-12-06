@@ -82,6 +82,7 @@ import           Foreign.Storable              (Storable (..))
 import qualified HsForeign                     as HF
 
 import           HsGrpc.Common.Foreign.Channel
+import           HsGrpc.Server.Internal.Types
 
 #include "hs_grpc_server.h"
 
@@ -244,14 +245,6 @@ streamingTypeFromCType C_StreamingType_NonStreaming    = NonStreaming
 streamingTypeFromCType C_StreamingType_ClientStreaming = ClientStreaming
 streamingTypeFromCType C_StreamingType_ServerStreaming = ServerStreaming
 streamingTypeFromCType C_StreamingType_BiDiStreaming   = BiDiStreaming
-
--------------------------------------------------------------------------------
--- (TODO) Grpc ServerContext
-
-data CServerContext
-
-newtype ServerContext = ServerContext {unServerContext :: (Ptr CServerContext)}
-  deriving (Show)
 
 -------------------------------------------------------------------------------
 -- GrpcSsl

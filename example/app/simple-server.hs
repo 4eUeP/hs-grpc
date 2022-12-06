@@ -12,6 +12,7 @@ import           Lens.Micro
 
 import           HsGrpc.Common.Log
 import           HsGrpc.Server
+import           HsGrpc.Server.Context
 import           Proto.Helloworld        as P
 import           Proto.Helloworld_Fields as P
 
@@ -28,7 +29,9 @@ handleEcho :: UnaryHandler P.EchoMsg P.EchoMsg
 handleEcho _ctx = pure
 
 handleSayHello :: UnaryHandler P.HelloRequest P.HelloReply
-handleSayHello _ctx req = pure $ defMessage & P.msg .~ (req ^. P.name)
+handleSayHello ctx req = do
+  print =<< serverContextPeer ctx
+  pure $ defMessage & P.msg .~ (req ^. P.name)
 
 handleClientStreamSayHello :: ClientStreamHandler P.HelloRequest P.HelloReply
 handleClientStreamSayHello _ctx stream = go (0 :: Int)

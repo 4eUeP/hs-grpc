@@ -55,16 +55,21 @@ common common-lang
 library
   import:             common-lang
   hs-source-dirs:     .
-  cxx-sources:        cbits/hs_grpc_server.cpp
+  cxx-sources:
+    cbits/hs_grpc_server.cpp
+    cbits/hs_grpc_server_context.cpp
+
   exposed-modules:
     HsGrpc.Common.Log
     HsGrpc.Server
+    HsGrpc.Server.Context
     HsGrpc.Server.Types
 
   other-modules:
     HsGrpc.Common.Foreign.Channel
     HsGrpc.Common.Utils
     HsGrpc.Server.FFI
+    HsGrpc.Server.Internal.Types
     HsGrpc.Server.Message
 
   build-depends:
