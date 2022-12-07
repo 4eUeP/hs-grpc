@@ -31,6 +31,7 @@ handleEcho _ctx = pure
 handleSayHello :: UnaryHandler P.HelloRequest P.HelloReply
 handleSayHello ctx req = do
   print =<< serverContextPeer ctx
+  print =<< findClientMetadata ctx "user-agent"
   pure $ defMessage & P.msg .~ (req ^. P.name)
 
 handleClientStreamSayHello :: ClientStreamHandler P.HelloRequest P.HelloReply
