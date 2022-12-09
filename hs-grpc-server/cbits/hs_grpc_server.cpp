@@ -423,10 +423,13 @@ struct CppAsioServer {
   std::unordered_map<std::string, hsgrpc::HandlerInfo> method_handlers_;
 };
 
-CppAsioServer*
-new_asio_server(const char* host, HsInt host_len, HsInt port,
-                hsgrpc::hs_ssl_server_credentials_options_t* ssl_server_opts,
-                HsInt parallelism) {
+CppAsioServer* new_asio_server(
+    const char* host, HsInt host_len, HsInt port, HsInt parallelism,
+    // ssl options
+    hsgrpc::hs_ssl_server_credentials_options_t* ssl_server_opts,
+    // interceptors
+    grpc::experimental::ServerInterceptorFactoryInterface** interceptor_facts,
+    HsInt interceptors_size) {
   const auto total_conc = std::thread::hardware_concurrency();
   if (parallelism <= 0 || parallelism > total_conc) {
     parallelism = total_conc;
@@ -468,6 +471,18 @@ new_asio_server(const char* host, HsInt host_len, HsInt port,
   }
 
   builder.RegisterAsyncGenericService(&server_data->service_);
+
+  if (interceptors_size > 0) {
+    std::vector<
+        std::unique_ptr<grpc::experimental::ServerInterceptorFactoryInterface>>
+        creators;
+    for (HsInt i = 0; i < interceptors_size; ++i) {
+      creators.push_back(std::unique_ptr<
+                         grpc::experimental::ServerInterceptorFactoryInterface>(
+          interceptor_facts[i]));
+    }
+    builder.experimental().SetInterceptorCreators(std::move(creators));
+  }
 
   server_data->server_ = builder.BuildAndStart();
   if (server_data->server_) {

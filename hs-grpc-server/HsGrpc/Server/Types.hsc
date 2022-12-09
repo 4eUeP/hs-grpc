@@ -49,6 +49,10 @@ module HsGrpc.Server.Types
   , pattern GrpcSslRequestAndRequireClientCertificateButDontVerify
   , pattern GrpcSslRequestAndRequireClientCertificateAndVerify
 
+    -- * Interceptors
+  , CServerInterceptorFactory
+  , ServerInterceptor (..)
+
     -- * Internal Types
   , Request (..)
   , Response (..)
@@ -89,11 +93,12 @@ import           HsGrpc.Server.Internal.Types
 -------------------------------------------------------------------------------
 
 data ServerOptions = ServerOptions
-  { serverHost        :: !ShortByteString
-  , serverPort        :: !Int
-  , serverParallelism :: !Int
-  , serverSslOptions  :: !(Maybe SslServerCredentialsOptions)
-  , serverOnStarted   :: !(Maybe (IO ()))
+  { serverHost         :: !ShortByteString
+  , serverPort         :: !Int
+  , serverParallelism  :: !Int
+  , serverSslOptions   :: !(Maybe SslServerCredentialsOptions)
+  , serverOnStarted    :: !(Maybe (IO ()))
+  , serverInterceptors :: ![ServerInterceptor]
   }
 
 instance Show ServerOptions where
@@ -430,3 +435,18 @@ newtype StatusCode = StatusCode { unStatusCode :: Int }
   , StatusDataLoss
   , StatusDoNotUse
   #-}
+
+-------------------------------------------------------------------------------
+-- Interceptors
+
+-- This following underlying type is exported by design so that users can make
+-- their own ffi from grpc cpp interceptor apis.
+
+data CServerInterceptorFactory
+
+-- TODO
+data ServerInterceptorFn
+
+data ServerInterceptor
+  = ServerInterceptorFromPtr (Ptr CServerInterceptorFactory)
+  | ServerInterceptor ServerInterceptorFn

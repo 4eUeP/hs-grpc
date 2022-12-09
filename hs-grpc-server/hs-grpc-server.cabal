@@ -28,6 +28,7 @@ source-repository head
   type:     git
   location: https://github.com/4eUeP/hs-grpc
 
+-- TODO: rename to use_protosuite
 flag UseProtoSuite
   default:     False
   description: Use proto3-suite as encoding & decoding

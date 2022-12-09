@@ -13,37 +13,72 @@ maintainer:         mu@laxcat.xyz
 category:           Network
 build-type:         Custom
 extra-source-files:
-  protos/helloworld.proto
+  protos/example.proto
   README.md
 
 custom-setup
   setup-depends:
-    , base              >=4.5 && <5
-    , Cabal             >=2.4 && <4
+    , base              >=4.5  && <5
+    , Cabal             >=2.4  && <4
     , proto-lens-setup  ^>=0.4
+
+library
+  build-depends:
+    , base                >=4.13 && <5
+    , proto-lens-runtime
+
+  exposed-modules:
+    Proto.Example
+    Proto.Example_Fields
+
+  autogen-modules:
+    Proto.Example
+    Proto.Example_Fields
+
+  default-language: Haskell2010
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
 
 executable simple-server
   hs-source-dirs:   app
   main-is:          simple-server.hs
   build-depends:
-    , base                >=4.13 && <5
+    , base             >=4.13 && <5
     , bytestring
+    , hs-grpc-example
     , hs-grpc-server
     , microlens
     , proto-lens
-    , proto-lens-runtime
     , text
-
-  other-modules:
-    Proto.Helloworld
-    Proto.Helloworld_Fields
-
-  autogen-modules:
-    Proto.Helloworld
-    Proto.Helloworld_Fields
 
   default-language: Haskell2010
   ghc-options:
     -Wall -Wcompat -Widentities -Wincomplete-record-updates
     -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
     -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -qg -qn1"
+
+executable server-interceptor
+  hs-source-dirs:   app
+  main-is:          server_interceptors.hs
+  build-depends:
+    , base             >=4.13 && <5
+    , bytestring
+    , hs-grpc-example
+    , hs-grpc-server
+    , microlens
+    , proto-lens
+    , text
+
+  default-language: Haskell2010
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
+    -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -qg -qn1"
+
+  cxx-sources:
+    app/server_interceptors.cpp
+    protos/gen-cpp/example.pb.cc
+
+  cxx-options:      -std=c++17
+  include-dirs:     protos/gen-cpp

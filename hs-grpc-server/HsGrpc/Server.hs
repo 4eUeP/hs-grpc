@@ -92,7 +92,9 @@ getGrpcMethod rpc =
 
 runServer :: ServerOptions -> [ServiceHandler] -> IO ()
 runServer ServerOptions{..} handlers = do
-  server <- newAsioServer serverHost serverPort serverSslOptions serverParallelism
+  server <- newAsioServer
+              serverHost serverPort serverParallelism
+              serverSslOptions serverInterceptors
   runAsioGrpc server handlers serverOnStarted
 
 -------------------------------------------------------------------------------
@@ -100,17 +102,24 @@ runServer ServerOptions{..} handlers = do
 type AsioServer = ForeignPtr CppAsioServer
 
 newAsioServer
-  :: ShortByteString -> Int
+  :: ShortByteString
+  -> Int    -- ^ port
+  -> Int    -- ^ parallelism
   -> Maybe SslServerCredentialsOptions
-  -> Int
+  -> [ServerInterceptor]
   -> IO AsioServer
-newAsioServer host port m_sslOpts parallelism = do
+newAsioServer host port parallelism m_sslOpts interceptors = do
   ptr <-
     HF.withShortByteString host $ \host' host_len ->
     HF.withMaybePtr m_sslOpts withSslServerCredentialsOptions $ \sslOpts' ->
-      new_asio_server host' host_len port sslOpts' parallelism
+    HF.withPrimList (map toCItcptFact interceptors) $ \intcept' intcept_size ->
+      new_asio_server host' host_len port parallelism sslOpts' intcept' intcept_size
   if ptr == nullPtr then Ex.throwIO $ ServerException "newGrpcServer failed!"
                     else newForeignPtr delete_asio_server_fun ptr
+  where
+    toCItcptFact :: ServerInterceptor -> Ptr CServerInterceptorFactory
+    toCItcptFact (ServerInterceptorFromPtr ptr) = ptr
+    toCItcptFact (ServerInterceptor _) = error "TODO: NotImplemented"
 
 runAsioGrpc :: AsioServer -> [ServiceHandler] -> Maybe (IO ()) -> IO ()
 runAsioGrpc server handlers onStarted =

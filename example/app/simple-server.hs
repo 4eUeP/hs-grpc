@@ -13,29 +13,25 @@ import           Lens.Micro
 import           HsGrpc.Common.Log
 import           HsGrpc.Server
 import           HsGrpc.Server.Context
-import           Proto.Helloworld        as P
-import           Proto.Helloworld_Fields as P
+import           Proto.Example        as P
+import           Proto.Example_Fields as P
 
 handlers :: [ServiceHandler]
 handlers =
-  [ unary (GRPC :: GRPC P.Greeter "echo") handleEcho
-  , unary (GRPC :: GRPC P.Greeter "sayHello") handleSayHello
-  , clientStream (GRPC :: GRPC P.Greeter "sayHelloClientStream") handleClientStreamSayHello
-  , serverStream (GRPC :: GRPC P.Greeter "sayHelloServerStream") handleServerStreamSayHello
-  , bidiStream (GRPC :: GRPC P.Greeter "sayHelloBiDiStream") handleBidiSayHello
+  [ unary (GRPC :: GRPC P.Example "unary") handleUnary
+  , clientStream (GRPC :: GRPC P.Example "clientStream") handleClientStream
+  , serverStream (GRPC :: GRPC P.Example "serverStream") handleServerStream
+  , bidiStream (GRPC :: GRPC P.Example "bidiStream") handleBidiStream
   ]
 
-handleEcho :: UnaryHandler P.EchoMsg P.EchoMsg
-handleEcho _ctx = pure
-
-handleSayHello :: UnaryHandler P.HelloRequest P.HelloReply
-handleSayHello ctx req = do
+handleUnary :: UnaryHandler P.Request P.Reply
+handleUnary ctx req = do
   print =<< serverContextPeer ctx
   print =<< findClientMetadata ctx "user-agent"
-  pure $ defMessage & P.msg .~ (req ^. P.name)
+  pure $ defMessage & P.msg .~ (req ^. P.msg)
 
-handleClientStreamSayHello :: ClientStreamHandler P.HelloRequest P.HelloReply
-handleClientStreamSayHello _ctx stream = go (0 :: Int)
+handleClientStream :: ClientStreamHandler P.Request P.Reply
+handleClientStream _ctx stream = go (0 :: Int)
   where
     go n = do
       m_req <- streamRead stream
@@ -47,22 +43,22 @@ handleClientStreamSayHello _ctx stream = go (0 :: Int)
           let reply = "Received " <> Text.pack (show n) <> " requests."
           pure $ defMessage & P.msg .~ reply
 
-handleServerStreamSayHello :: ServerStreamHandler P.HelloRequest P.HelloReply ()
-handleServerStreamSayHello _ctx req stream = do
+handleServerStream :: ServerStreamHandler P.Request P.Reply ()
+handleServerStream _ctx req stream = do
   putStrLn $ "Received client request " <> show req
   whileM $ do
     threadDelay 1000000
     putStrLn "Sending reply..."
-    let reply = defMessage & P.msg .~ ("hi, " <> req ^. P.name)
+    let reply = defMessage & P.msg .~ ("hi, " <> req ^. P.msg)
     isRight <$> streamWrite stream (Just reply)
   putStrLn "Server streaming done."
 
-handleBidiSayHello :: BidiStreamHandler P.HelloRequest P.HelloReply ()
-handleBidiSayHello _ctx stream = whileM $ do
+handleBidiStream :: BidiStreamHandler P.Request P.Reply ()
+handleBidiStream _ctx stream = whileM $ do
   m_req <- streamRead stream
   case m_req of
     Just req -> do
-      let reply = defMessage & P.msg .~ ("hi, " <> req ^. P.name)
+      let reply = defMessage & P.msg .~ ("hi, " <> req ^. P.msg)
       isRight <$> streamWrite stream (Just reply)
     Nothing -> putStrLn "Client closed" >> pure False
 
@@ -76,6 +72,7 @@ main = do
                            , serverParallelism = 0
                            , serverSslOptions = Nothing
                            , serverOnStarted = Just onStarted
+                           , serverInterceptors = []
                            }
   gprSetLogVerbosity GprLogSeverityInfo
   runServer opts handlers

@@ -26,3 +26,4 @@ Local*
 *~
 *.swp
 /core
+gen-cpp

@@ -20,9 +20,12 @@ foreign import ccall unsafe "new_asio_server"
     -- ^ host, host_len
     -> Int
     -- ^ port
-    -> Ptr SslServerCredentialsOptions
     -> Int
     -- ^ parallelism
+    -> Ptr SslServerCredentialsOptions
+    -- ^ tls options
+    -> Ptr (Ptr CServerInterceptorFactory) -> Int
+    -- ^ Interceptors
     -> IO (Ptr CppAsioServer)
 
 foreign import ccall unsafe "shutdown_asio_server"
