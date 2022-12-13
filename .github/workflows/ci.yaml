@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, testing]
 
   pull_request:
     branches: [main]
@@ -124,6 +124,9 @@ jobs:
       - name: Update system PATH
         run: |
           echo "$HOME/.cabal/bin" >> $GITHUB_PATH
+
+      - name: generate example grpc c++ files
+        run: make -f example/Makefile
 
       - name: sdist
         run: |
