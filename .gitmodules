@@ -1,6 +1,6 @@
 [submodule "external/asio-grpc"]
 	path = external/asio-grpc
-	url = git@github.com:Tradias/asio-grpc.git
+	url = https://github.com/Tradias/asio-grpc.git
 [submodule "external/asio"]
 	path = external/asio
-	url = git@github.com:chriskohlhoff/asio.git
+	url = https://github.com/chriskohlhoff/asio.git
