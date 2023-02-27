@@ -388,7 +388,8 @@ whileM :: Monad m => m Bool -> m ()
 whileM act = do
   b <- act
   when b $ whileM act
-{-# INLINE whileM #-}
+{-# INLINABLE whileM #-}
+{-# SPECIALISE whileM :: IO Bool -> IO () #-}
 
 bs2str :: ByteString -> String
 bs2str = Text.unpack . Text.decodeUtf8
