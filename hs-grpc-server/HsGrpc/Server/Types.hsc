@@ -100,6 +100,8 @@ data ServerOptions = ServerOptions
   , serverSslOptions   :: !(Maybe SslServerCredentialsOptions)
   , serverOnStarted    :: !(Maybe (IO ()))
   , serverInterceptors :: ![ServerInterceptor]
+    -- The following options are considering as internal
+  , serverInternalChannelSize :: !Word
   }
 
 defaultServerOpts :: ServerOptions
@@ -110,6 +112,7 @@ defaultServerOpts = ServerOptions
   , serverSslOptions = Nothing
   , serverOnStarted = Nothing
   , serverInterceptors = []
+  , serverInternalChannelSize = 512
   }
 
 instance Show ServerOptions where

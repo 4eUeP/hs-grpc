@@ -96,7 +96,7 @@ runServer ServerOptions{..} handlers = do
   server <- newAsioServer
               serverHost serverPort serverParallelism
               serverSslOptions serverInterceptors
-  runAsioGrpc server handlers serverOnStarted
+  runAsioGrpc server handlers serverOnStarted serverInternalChannelSize
 
 -------------------------------------------------------------------------------
 
@@ -122,8 +122,15 @@ newAsioServer host port parallelism m_sslOpts interceptors = do
     toCItcptFact (ServerInterceptorFromPtr ptr) = ptr
     toCItcptFact (ServerInterceptor _)          = error "TODO: NotImplemented"
 
-runAsioGrpc :: AsioServer -> [ServiceHandler] -> Maybe (IO ()) -> IO ()
-runAsioGrpc server handlers onStarted =
+runAsioGrpc
+  :: AsioServer
+  -> [ServiceHandler]
+  -> Maybe (IO ())
+  -> Word
+  -- ^ This is the buffer size of 'CppChannelIn' or 'CppChannelOut' used for
+  -- streaming rpcs.
+  -> IO ()
+runAsioGrpc server handlers onStarted maxBufferSize =
   withForeignPtr server $ \server_ptr ->
   -- handlers info
   HF.withByteStringList (map rpcMethod handlers) $ \ms' ms_len' total_len ->
@@ -137,6 +144,7 @@ runAsioGrpc server handlers onStarted =
                                   ms' ms_len' mt' mUseThread' total_len
                                   cbPtr
                                   cfdOnStarted
+                                  (fromIntegral maxBufferSize)
           stop a = shutdown_asio_server server_ptr >> Async.wait a
        in Ex.bracket (Async.async start) stop Async.wait
 

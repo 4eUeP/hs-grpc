@@ -145,6 +145,7 @@ struct HsAsioHandler {
   std::unordered_map<std::string, HandlerInfo>& method_handlers;
   HsCallback& callback;
   asio::thread_pool& thread_pool;
+  size_t max_buffer_size;
 
   asio::awaitable<void>
   handleUnary(grpc::GenericServerContext& server_context,
@@ -209,11 +210,8 @@ struct HsAsioHandler {
                         grpc::GenericServerAsyncReaderWriter& reader_writer,
                         server_request_t& request,
                         server_response_t& response) {
-    // TODO: let user chooses the maxBufferSize
-    std::size_t maxBufferSize = 8192;
-
     auto cpp_channel_in = std::make_shared<ChannelIn>(
-        co_await asio::this_coro::executor, maxBufferSize);
+        co_await asio::this_coro::executor, max_buffer_size);
     auto hs_channel_in = new channel_in_t{cpp_channel_in};
     // FIXME: use a lightweight structure instead (just like a async mvar?)
     auto cpp_channel_out =
@@ -259,10 +257,8 @@ struct HsAsioHandler {
                         grpc::GenericServerAsyncReaderWriter& reader_writer,
                         server_request_t& request,
                         server_response_t& response) {
-    // TODO: let user chooses the maxBufferSize
-    std::size_t maxBufferSize = 8192;
     auto cpp_channel_out = std::make_shared<ChannelOut>(
-        co_await asio::this_coro::executor, maxBufferSize);
+        co_await asio::this_coro::executor, max_buffer_size);
     auto hs_channel_out = new channel_out_t{cpp_channel_out};
 
     // Wait for the request message
@@ -317,17 +313,14 @@ struct HsAsioHandler {
   handleBidiStreaming(grpc::GenericServerContext& server_context,
                       grpc::GenericServerAsyncReaderWriter& reader_writer,
                       server_request_t& request, server_response_t& response) {
-    // TODO: let user chooses the maxBufferSize
-    std::size_t maxBufferSize = 8192;
-
     // NOTE: There are two refs to the shared_ptr, one is handleBidiStreaming
     // function on the cpp side, another is the haskell side. Thus, the stored
     // obj in the shared_ptr is freed while both handleBidiStreaming and haskell
     // ForeignPtr are exited.
     auto cpp_channel_in = std::make_shared<ChannelIn>(
-        co_await asio::this_coro::executor, maxBufferSize);
+        co_await asio::this_coro::executor, max_buffer_size);
     auto cpp_channel_out = std::make_shared<ChannelOut>(
-        co_await asio::this_coro::executor, maxBufferSize);
+        co_await asio::this_coro::executor, max_buffer_size);
     auto hs_channel_in =
         new channel_in_t{cpp_channel_in}; // delete by haskell gc
     auto hs_channel_out =
@@ -500,7 +493,8 @@ void run_asio_server(CppAsioServer* server,
                      bool* method_handlers_use_thread_pool,
                      HsInt method_handlers_total_len,
                      // method handlers end
-                     hsgrpc::HsCallback callback, int fd_on_started) {
+                     hsgrpc::HsCallback callback, int fd_on_started,
+                     size_t max_buffer_size) {
   server->method_handlers_.reserve(method_handlers_total_len);
   for (HsInt i = 0; i < method_handlers_total_len; ++i) {
     server->method_handlers_.emplace(std::make_pair(
@@ -519,7 +513,8 @@ void run_asio_server(CppAsioServer* server,
           server->service_,
           asio::bind_executor(grpc_context,
                               hsgrpc::HsAsioHandler{server->method_handlers_,
-                                                    callback, thread_pool}));
+                                                    callback, thread_pool,
+                                                    max_buffer_size}));
       grpc_context.run();
     });
   }
