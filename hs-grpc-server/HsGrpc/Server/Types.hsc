@@ -3,6 +3,7 @@
 
 module HsGrpc.Server.Types
   ( ServerOptions (..)
+  , defaultServerOpts
 
   , ServerException (..)
 
@@ -99,6 +100,16 @@ data ServerOptions = ServerOptions
   , serverSslOptions   :: !(Maybe SslServerCredentialsOptions)
   , serverOnStarted    :: !(Maybe (IO ()))
   , serverInterceptors :: ![ServerInterceptor]
+  }
+
+defaultServerOpts :: ServerOptions
+defaultServerOpts = ServerOptions
+  { serverHost = "127.0.0.1"
+  , serverPort = 50051
+  , serverParallelism = 0
+  , serverSslOptions = Nothing
+  , serverOnStarted = Nothing
+  , serverInterceptors = []
   }
 
 instance Show ServerOptions where

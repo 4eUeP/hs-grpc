@@ -8,6 +8,7 @@
 module HsGrpc.Server
   ( GRPC (..)
   , ServerOptions (..)
+  , defaultServerOpts
   , runServer
 
     -- * Handlers
@@ -119,7 +120,7 @@ newAsioServer host port parallelism m_sslOpts interceptors = do
   where
     toCItcptFact :: ServerInterceptor -> Ptr CServerInterceptorFactory
     toCItcptFact (ServerInterceptorFromPtr ptr) = ptr
-    toCItcptFact (ServerInterceptor _) = error "TODO: NotImplemented"
+    toCItcptFact (ServerInterceptor _)          = error "TODO: NotImplemented"
 
 runAsioGrpc :: AsioServer -> [ServiceHandler] -> Maybe (IO ()) -> IO ()
 runAsioGrpc server handlers onStarted =
