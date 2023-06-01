@@ -24,11 +24,16 @@ handlers =
   , bidiStream (GRPC :: GRPC P.Example "bidiStream") handleBidiStream
   ]
 
+-- Get context
+--
+--handleUnary1 :: UnaryHandler P.Request P.Reply
+--handleUnary1 ctx req = do
+--  print =<< serverContextPeer ctx
+--  print =<< findClientMetadata ctx "user-agent"
+--  pure $ defMessage & P.msg .~ (req ^. P.msg)
+
 handleUnary :: UnaryHandler P.Request P.Reply
-handleUnary ctx req = do
-  print =<< serverContextPeer ctx
-  print =<< findClientMetadata ctx "user-agent"
-  pure $ defMessage & P.msg .~ (req ^. P.msg)
+handleUnary _ req = pure $ defMessage & P.msg .~ (req ^. P.msg)
 
 handleClientStream :: ClientStreamHandler P.Request P.Reply
 handleClientStream _ctx stream = go (0 :: Int)
@@ -67,12 +72,11 @@ onStarted = putStrLn "Server listening on 0.0.0.0:50051"
 
 main :: IO ()
 main = do
-  let opts = ServerOptions { serverHost = "0.0.0.0"
-                           , serverPort = 50051
-                           , serverParallelism = 0
-                           , serverSslOptions = Nothing
-                           , serverOnStarted = Just onStarted
-                           , serverInterceptors = []
-                           }
+  let opts = defaultServerOpts{ serverHost = "0.0.0.0"
+                              , serverPort = 50051
+                              , serverParallelism = 0
+                              , serverSslOptions = Nothing
+                              , serverOnStarted = Just onStarted
+                              }
   gprSetLogVerbosity GprLogSeverityInfo
   runServer opts handlers

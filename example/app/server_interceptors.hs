@@ -25,13 +25,13 @@ onStarted = putStrLn "Server listening on 0.0.0.0:50051"
 main :: IO ()
 main = do
   sendMessageInterceptor <- ServerInterceptorFromPtr <$> sendMessageInterceptorFactory
-  let opts = ServerOptions { serverHost = "0.0.0.0"
-                           , serverPort = 50051
-                           , serverParallelism = 0
-                           , serverSslOptions = Nothing
-                           , serverOnStarted = Just onStarted
-                           , serverInterceptors = [sendMessageInterceptor]
-                           }
+  let opts = defaultServerOpts{ serverHost = "0.0.0.0"
+                              , serverPort = 50051
+                              , serverParallelism = 0
+                              , serverSslOptions = Nothing
+                              , serverOnStarted = Just onStarted
+                              , serverInterceptors = [sendMessageInterceptor]
+                              }
   gprSetLogVerbosity GprLogSeverityInfo
   runServer opts handlers
 
