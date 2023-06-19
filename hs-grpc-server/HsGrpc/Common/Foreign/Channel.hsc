@@ -20,8 +20,7 @@ import           Foreign.Ptr              (FunPtr, nullPtr)
 import           Foreign.StablePtr        (StablePtr)
 import           Foreign.Storable
 import           GHC.Conc
-import           HsForeign                (unsafePeekStdString, withAsyncFFI,
-                                           withPrimAsyncFFI)
+import           HsForeign                (withAsyncFFI, withPrimAsyncFFI)
 
 #include "hs_grpc_server.h"
 
@@ -99,10 +98,15 @@ channelCbDataSize = (#size hsgrpc::read_channel_cb_data_t)
 peekChannelCbData :: Ptr ChannelCbData -> IO ChannelCbData
 peekChannelCbData ptr = do
   ec <- (#peek hsgrpc::read_channel_cb_data_t, ec) ptr
-  buf <- if ec == 0
-            then do buf' <- (#peek hsgrpc::read_channel_cb_data_t, buf) ptr
+  buff <- if ec == 0
+            then do buff_data <- (#peek hsgrpc::read_channel_cb_data_t, buff_data) ptr
+                    buff_size <- (#peek hsgrpc::read_channel_cb_data_t, buff_size) ptr
                     -- FIXME: Here we assume that if errcode is 0, then the ptr will
                     -- not be NULL. Do we need to check it?
-                    Just <$> unsafePeekStdString buf'
+                    buf' <- newForeignPtr finalizerGprFree buff_data
+                    pure $ Just (BS.PS buf' 0 buff_size)
             else pure Nothing
-  pure $ ChannelCbData ec buf
+  pure $ ChannelCbData ec buff
+
+foreign import ccall unsafe "grpc/support/alloc.h &gpr_free"
+  finalizerGprFree :: FinalizerPtr a

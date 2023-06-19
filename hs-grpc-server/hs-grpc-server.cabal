@@ -107,6 +107,7 @@ library
   extra-libraries:
     stdc++
     grpc++
+    grpc
     gpr
     grpc++_reflection
     protobuf

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <agrpc/asio_grpc.hpp>
+#include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
 #include <asio/bind_executor.hpp>
 #include <asio/detached.hpp>
@@ -18,20 +19,11 @@
 namespace hsgrpc {
 // ----------------------------------------------------------------------------
 
-bool byteBufferDumpToString(grpc::ByteBuffer& buffer, std::string& input) {
-  auto size = buffer.Length();
-  input.reserve(size);
-
-  std::vector<grpc::Slice> input_slices;
-  auto r = buffer.Dump(&input_slices);
-  if (r.ok()) {
-    for (auto& slice : input_slices) {
-      input += std::string(std::begin(slice), std::end(slice));
-    }
-    return true;
-  } else {
-    return false;
-  }
+// The same as "grpc_slice_to_c_string", but return a CStringLen
+std::pair<uint8_t*, size_t> grpc_slice_to_c_string_len(grpc_slice slice) {
+  uint8_t* out = static_cast<uint8_t*>(gpr_malloc(GRPC_SLICE_LENGTH(slice)));
+  memcpy(out, GRPC_SLICE_START_PTR(slice), GRPC_SLICE_LENGTH(slice));
+  return std::make_pair(out, GRPC_SLICE_LENGTH(slice));
 }
 
 grpc::Status consErrReplyStatus(server_response_t& response) {
@@ -85,21 +77,27 @@ struct StreamChannel {
       if (!co_await agrpc::read(reader_writer, buffer, asio::use_awaitable)) {
         gpr_log(GPR_DEBUG,
                 "StreamChannel read failed, maybe client is done writing.");
+        channel_in->cancel();
         channel_in->close();
         break;
       }
-      std::string buffer_str;
-      // TODO: validate the return value of byteBufferDumpToString
-      byteBufferDumpToString(buffer, buffer_str);
+      grpc::Slice slice;
+      auto r = buffer.DumpToSingleSlice(&slice);
+      if (!r.ok()) {
+        gpr_log(GPR_ERROR, "StreamChannel reader dump failed! %s",
+                r.error_message().c_str());
+        break;
+      }
 
       if (!channel_in->is_open()) {
         gpr_log(GPR_DEBUG, "StreamChannel ChannelIn got closed.");
         break;
       }
-      // Send request to writer. Using detached as completion token since we do
-      // not want to wait until the writer has picked up the request.
-      channel_in->async_send(asio::error_code{}, std::move(buffer_str),
-                             asio::detached);
+      // Send request to writer. The `max_buffer_size` of the channel acts as
+      // backpressure.
+      (void)co_await channel_in->async_send(
+          asio::error_code{}, std::move(slice),
+          asio::as_tuple(asio::use_awaitable));
     }
     gpr_log(GPR_DEBUG, "Exit StreamChannel reader");
   }
@@ -110,25 +108,36 @@ struct StreamChannel {
     }
     bool ok{true};
     while (ok) {
-      asio::error_code ec;
-      auto buffer = co_await channel_out->async_receive(
-          asio::redirect_error(asio::use_awaitable, ec));
+      const auto [ec, buffer] = co_await channel_out->async_receive(
+          asio::as_tuple(asio::use_awaitable));
       if (ec) {
         gpr_log(GPR_DEBUG, "StreamChannel ChannelOut got closed.");
         ok = false;
         break;
       }
       ok = co_await agrpc::write(reader_writer, buffer, asio::use_awaitable);
-      // Now we are back on the main thread.
     }
     gpr_log(GPR_DEBUG, "Exit StreamChannel writer with %s",
             ok ? "true" : "false");
 
-    // FIXME: Here we finish the rpc if ChannelOut was closed.
+    // FIXME: Here we close ChannelIn and finish the rpc if ChannelOut was
+    // closed.
     //
-    // But how about server half-closed the stream? (server closes the
-    // response stream but client continues to send data)
+    // Take care about all scenario that ChannelIn and ChannelOut are freed
+    // after client exit.
+    //
+    // 1. Client continues to send datas but doesn't receive anything, also all
+    // direction are opened. And then client receives a ctrl-c and exit.
+    //
+    // How about server half-closed the stream?
+    //
+    // 1. server closes the response stream but client continues to send data
     if (!ok) {
+      if (channel_in) {
+        gpr_log(GPR_DEBUG,
+                "Close ChannelIn since we exit StreamChannel writer");
+        channel_in->cancel();
+      }
       co_await finishGrpc(reader_writer, response);
     }
     co_return ok;
@@ -161,24 +170,18 @@ struct HsAsioHandler {
     }
 
     // Dump buffer
-    std::string input;
-    bool dump_ok = byteBufferDumpToString(buffer, input);
-    if (!dump_ok) {
-      gpr_log(GPR_ERROR, "byteBufferDumpToString failed!.");
+    grpc::Slice slice;
+    auto r = buffer.DumpToSingleSlice(&slice);
+    if (!r.ok()) {
+      gpr_log(GPR_ERROR, "ByteBuffer dump failed!");
       co_await agrpc::finish(
           reader_writer,
           grpc::Status(grpc::StatusCode::INTERNAL, "Parsing request failed"));
       co_return;
     }
-    // TODO: grpc 1.39+ support DumpToSingleSlice
-    //
-    // grpc::Slice slice;
-    // auto r = buffer.DumpToSingleSlice(&slice);
-    //
-    // request.data = (uint8_t*)slice.begin();
-    // request.data_size = slice.size();
-    request.data = (uint8_t*)input.data();
-    request.data_size = input.size();
+
+    request.data = (uint8_t*)slice.begin();
+    request.data_size = slice.size();
     request.server_context = &server_context;
 
     if (use_thread_pool) {
@@ -270,24 +273,18 @@ struct HsAsioHandler {
     }
 
     // Dump buffer
-    std::string input;
-    bool dump_ok = byteBufferDumpToString(buffer, input);
-    if (!dump_ok) {
-      gpr_log(GPR_ERROR, "byteBufferDumpToString failed!.");
+    grpc::Slice slice;
+    auto r = buffer.DumpToSingleSlice(&slice);
+    if (!r.ok()) {
+      gpr_log(GPR_ERROR, "ByteBuffer dump failed!.");
       co_await agrpc::finish(
           reader_writer,
           grpc::Status(grpc::StatusCode::INTERNAL, "Parsing request failed"));
       co_return;
     }
-    // TODO: grpc 1.39+ support DumpToSingleSlice
-    //
-    // grpc::Slice slice;
-    // auto r = buffer.DumpToSingleSlice(&slice);
-    //
-    // request.data = (uint8_t*)slice.begin();
-    // request.data_size = slice.size();
-    request.data = (uint8_t*)input.data();
-    request.data_size = input.size();
+
+    request.data = (uint8_t*)slice.begin();
+    request.data_size = slice.size();
     request.channel_out = hs_channel_out;
     request.server_context = &server_context;
 
@@ -298,8 +295,10 @@ struct HsAsioHandler {
         StreamChannel{reader_writer, nullptr, cpp_channel_out.get(), response};
     const auto ok = co_await streamChannel.writer();
 
-    if (cpp_channel_out->is_open())
+    if (cpp_channel_out->is_open()) {
+      cpp_channel_out->cancel();
       cpp_channel_out->close();
+    }
 
     if (!ok) {
       gpr_log(GPR_DEBUG, "Client has disconnected or server is shuttingdown.");
@@ -341,8 +340,10 @@ struct HsAsioHandler {
                                        cpp_channel_out.get(), response};
     const auto ok = co_await (streamChannel.reader() && streamChannel.writer());
 
-    if (cpp_channel_out->is_open())
+    if (cpp_channel_out->is_open()) {
+      cpp_channel_out->cancel();
       cpp_channel_out->close();
+    }
 
     if (!ok) {
       gpr_log(GPR_DEBUG, "Client has disconnected or server is shuttingdown.");
@@ -542,11 +543,16 @@ void delete_asio_server(CppAsioServer* server) {
 void read_channel(hsgrpc::channel_in_t* channel, HsStablePtr mvar, HsInt cap,
                   hsgrpc::read_channel_cb_data_t* cb_data) {
   channel->rep->async_receive(
-      [mvar, cap, cb_data](asio::error_code ec, std::string&& buf) {
+      [mvar, cap, cb_data](asio::error_code ec, grpc::Slice&& slice) {
         if (cb_data) {
           cb_data->ec = (HsInt)ec.value();
-          if (cb_data->ec == 0) {                // success
-            cb_data->buf = new std::string(buf); // delete on haskell side
+          if (cb_data->ec == 0) { // success
+            auto c_slice = slice.c_slice();
+            auto c_strlen = hsgrpc::grpc_slice_to_c_string_len(
+                c_slice); // return a copy of slice and delete on haskell side
+            grpc_slice_unref(c_slice);
+            cb_data->buff_data = std::get<0>(c_strlen);
+            cb_data->buff_size = std::get<1>(c_strlen);
           }
         }
         hs_try_putmvar(cap, mvar);
@@ -566,15 +572,25 @@ void write_channel(hsgrpc::channel_out_t* channel, const char* payload,
                            });
 }
 
-void close_in_channel(hsgrpc::channel_out_t* channel) { channel->rep->close(); }
-
-void delete_in_channel(hsgrpc::channel_in_t* channel) { delete channel; }
-
-void close_out_channel(hsgrpc::channel_out_t* channel) {
+void close_in_channel(hsgrpc::channel_in_t* channel) {
+  gpr_log(GPR_DEBUG, "Close in channel.");
   channel->rep->close();
 }
 
-void delete_out_channel(hsgrpc::channel_out_t* channel) { delete channel; }
+void delete_in_channel(hsgrpc::channel_in_t* channel) {
+  gpr_log(GPR_DEBUG, "Delete in channel.");
+  delete channel;
+}
+
+void close_out_channel(hsgrpc::channel_out_t* channel) {
+  gpr_log(GPR_DEBUG, "Close out channel.");
+  channel->rep->close();
+}
+
+void delete_out_channel(hsgrpc::channel_out_t* channel) {
+  gpr_log(GPR_DEBUG, "Delete out channel.");
+  delete channel;
+}
 
 // ----------------------------------------------------------------------------
 } // End extern "C"

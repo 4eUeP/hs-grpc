@@ -5,13 +5,12 @@
 #include <asio/experimental/concurrent_channel.hpp>
 #include <cstdint>
 #include <grpcpp/server.h>
+#include <grpcpp/support/slice.h>
 
 namespace hsgrpc {
 
-bool byteBufferDumpToString(grpc::ByteBuffer& buffer, std::string& input);
-
 using ChannelIn =
-    asio::experimental::concurrent_channel<void(asio::error_code, std::string)>;
+    asio::experimental::concurrent_channel<void(asio::error_code, grpc::Slice)>;
 
 using ChannelOut = asio::experimental::concurrent_channel<void(
     asio::error_code, grpc::ByteBuffer)>;
@@ -68,7 +67,8 @@ using HsCallback = void (*)(server_request_t*, server_response_t*);
 
 struct read_channel_cb_data_t {
   HsInt ec;
-  std::string* buf;
+  uint8_t* buff_data = nullptr;
+  size_t buff_size = 0;
 };
 
 } // namespace hsgrpc
