@@ -15,9 +15,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        ghc: ['8.10.7', '9.2.5']
-        cabal: ['3.6']
-        grpc: ['v1.35.0']
+        ghc: ['9.2.8']
+        cabal: ['3.8']
+        grpc: ['v1.54.2']
         os: [ubuntu-latest]  # TODO: macOS-latest
 
     name: ghc-${{ matrix.ghc }} cabal-${{ matrix.cabal }} grpc-${{ matrix.grpc }} on ${{ matrix.os }}
@@ -25,7 +25,7 @@ jobs:
       GRPC_RELEASE_DIR: /opt/grpc-${{ matrix.grpc }}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: 'recursive'
 
@@ -116,7 +116,7 @@ jobs:
           sudo ln -s $(realpath $GRPC_RELEASE_DIR/include)/* /usr/local/include/
 
       - name: Setup Haskell
-        uses: haskell/actions/setup@v1
+        uses: haskell/actions/setup@v2
         with:
           ghc-version: ${{ matrix.ghc }}
           cabal-version: ${{ matrix.cabal }}
