@@ -222,7 +222,7 @@ data ServiceHandler = ServiceHandler
   , rpcUseThreadPool :: !Bool
   } deriving (Show)
 
--- | Switch to a thread_pool to run the Handler. The may only useful for unary
+-- | Switch to a thread_pool to run the Handler. This may only useful for unary
 -- handler.
 handlerUseThreadPool :: ServiceHandler -> ServiceHandler
 handlerUseThreadPool handler = handler{rpcUseThreadPool = True}

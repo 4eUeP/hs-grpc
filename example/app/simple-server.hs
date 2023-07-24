@@ -53,9 +53,10 @@ handleServerStream _ctx req stream = do
   putStrLn $ "Received client request " <> show req
   whileM $ do
     threadDelay 1000000
-    putStrLn "Sending reply..."
-    let reply = defMessage & P.msg .~ ("hi, " <> req ^. P.msg)
-    isRight <$> streamWrite stream (Just reply)
+    pure True
+    --putStrLn "Sending reply..."
+    --let reply = defMessage & P.msg .~ ("hi, " <> req ^. P.msg)
+    --isRight <$> streamWrite stream (Just reply)
   putStrLn "Server streaming done."
 
 handleBidiStream :: BidiStreamHandler P.Request P.Reply ()
@@ -78,5 +79,5 @@ main = do
                               , serverSslOptions = Nothing
                               , serverOnStarted = Just onStarted
                               }
-  gprSetLogVerbosity GprLogSeverityInfo
+  gprSetLogVerbosity GprLogSeverityDebug
   runServer opts handlers

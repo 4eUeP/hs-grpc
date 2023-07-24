@@ -11,10 +11,14 @@
 #include <asio/bind_executor.hpp>
 #include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
+#include <asio/experimental/promise.hpp>
+#include <asio/experimental/use_promise.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/thread_pool.hpp>
 #include <grpc/support/log.h>
 #include <grpcpp/server_builder.h>
+
+#define HSGRPC_ENABLE_NOTIFY_WHEN_DONE
 
 namespace hsgrpc {
 // ----------------------------------------------------------------------------
@@ -263,11 +267,29 @@ struct HsAsioHandler {
   asio::awaitable<void>
   handleServerStreaming(grpc::GenericServerContext& server_context,
                         grpc::GenericServerAsyncReaderWriter& reader_writer,
-                        server_request_t& request,
-                        server_response_t& response) {
+                        server_request_t& request, server_response_t& response
+#ifdef HSGRPC_ENABLE_NOTIFY_WHEN_DONE
+                        ,
+                        auto on_done
+#endif
+  ) {
     auto cpp_channel_out = std::make_shared<ChannelOut>(
         co_await asio::this_coro::executor, max_buffer_size);
     auto hs_channel_out = new channel_out_t{cpp_channel_out};
+#ifdef HSGRPC_ENABLE_NOTIFY_WHEN_DONE
+    // TODO: use hs_event_notify to let user pass custom on_done function
+    const bool is_cancelled = on_done.completed();
+    if (!is_cancelled) {
+      on_done([&server_context, &cpp_channel_out]() {
+        // cancelled or finished
+        if (server_context.IsCancelled()) {
+          gpr_log(GPR_DEBUG, "ServerStreaming Client exit!");
+          cpp_channel_out->cancel();
+          cpp_channel_out->close();
+        }
+      });
+    }
+#endif
 
     // Wait for the request message
     grpc::ByteBuffer buffer;
@@ -360,7 +382,12 @@ struct HsAsioHandler {
 
   asio::awaitable<void>
   operator()(grpc::GenericServerContext& server_context,
-             grpc::GenericServerAsyncReaderWriter& reader_writer) {
+             grpc::GenericServerAsyncReaderWriter& reader_writer
+#ifdef HSGRPC_ENABLE_NOTIFY_WHEN_DONE
+             ,
+             auto on_done
+#endif
+  ) {
     // -- Find handlers
     auto method = server_context.method();
     auto method_handler_ = method_handlers.find(method);
@@ -379,14 +406,21 @@ struct HsAsioHandler {
                                        response);
           break;
         }
-        case StreamingType::ClientStreaming:
+        case StreamingType::ClientStreaming: {
           co_await handleClientStreaming(server_context, reader_writer, request,
                                          response);
           break;
-        case StreamingType::ServerStreaming:
+        }
+        case StreamingType::ServerStreaming: {
+#ifdef HSGRPC_ENABLE_NOTIFY_WHEN_DONE
+          co_await handleServerStreaming(server_context, reader_writer, request,
+                                         response, std::move(on_done));
+#else
           co_await handleServerStreaming(server_context, reader_writer, request,
                                          response);
+#endif
           break;
+        }
       } // Let compiler check that all enum values are handled.
     } else {
       co_await agrpc::finish(reader_writer,
@@ -395,7 +429,7 @@ struct HsAsioHandler {
       co_return;
     }
   }
-};
+}; // namespace hsgrpc
 
 void hs_event_notify(int& fd) {
   if (fd == -1)
@@ -408,6 +442,31 @@ void hs_event_notify(int& fd) {
     return;
   }
 }
+
+#ifdef HSGRPC_ENABLE_NOTIFY_WHEN_DONE
+template <class RequestHandler>
+asio::awaitable<void> request_loop(agrpc::GrpcContext& grpc_context,
+                                   grpc::AsyncGenericService& service,
+                                   RequestHandler request_handler) {
+  grpc::GenericServerContext server_context;
+  // Has to be called before rpc starts
+  auto on_done = agrpc::notify_when_done(grpc_context, server_context,
+                                         asio::experimental::use_promise);
+  grpc::GenericServerAsyncReaderWriter reader_writer{&server_context};
+
+  const bool ok = co_await agrpc::request(service, server_context,
+                                          reader_writer, asio::use_awaitable);
+  if (!ok) {
+    // At this point, `agrpc::notify_when_done` will never complete.
+    grpc_context.work_finished();
+    co_return;
+  }
+  asio::co_spawn(grpc_context,
+                 request_loop(grpc_context, service, request_handler),
+                 asio::detached);
+  co_await request_handler(server_context, reader_writer, std::move(on_done));
+}
+#endif
 
 } // namespace hsgrpc
 
@@ -515,12 +574,22 @@ void run_asio_server(CppAsioServer* server,
   for (size_t i = 0; i < parallelism; ++i) {
     server->server_threads_.emplace_back([&, i] {
       auto& grpc_context = *std::next(server->grpc_contexts_.begin(), i);
+#ifdef HSGRPC_ENABLE_NOTIFY_WHEN_DONE
+      asio::co_spawn(
+          grpc_context,
+          hsgrpc::request_loop(grpc_context, server->service_,
+                               std::move(hsgrpc::HsAsioHandler{
+                                   server->method_handlers_, callback,
+                                   thread_pool, max_buffer_size})),
+          asio::detached);
+#else
       agrpc::repeatedly_request(
           server->service_,
           asio::bind_executor(grpc_context,
                               hsgrpc::HsAsioHandler{server->method_handlers_,
                                                     callback, thread_pool,
                                                     max_buffer_size}));
+#endif
       grpc_context.run();
     });
   }

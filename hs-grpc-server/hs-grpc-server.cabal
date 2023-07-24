@@ -92,8 +92,9 @@ library
     "--cflag=-std=c++17"
 
   cxx-options:
-    -std=c++17 -Werror=switch -fcoroutines -DAGRPC_STANDALONE_ASIO
-    -DASIO_HAS_CO_AWAIT -DASIO_HAS_STD_COROUTINE
+    -std=c++17 -Werror=switch -fcoroutines -fconcepts-ts
+    -DAGRPC_STANDALONE_ASIO -DASIO_HAS_CO_AWAIT
+    -DASIO_HAS_STD_COROUTINE
 
   if flag(useprotosuite)
     build-depends: proto3-suite ^>=0.5
