@@ -112,7 +112,7 @@ defaultServerOpts = ServerOptions
   , serverSslOptions = Nothing
   , serverOnStarted = Nothing
   , serverInterceptors = []
-  , serverInternalChannelSize = 512
+  , serverInternalChannelSize = 2
   }
 
 instance Show ServerOptions where
