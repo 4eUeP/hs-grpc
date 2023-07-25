@@ -145,8 +145,13 @@ struct StreamChannel {
 };
 
 struct HandlerInfo {
-  StreamingType type;
   HsInt hs_handler_idx;
+  // NOTE: we can use bit-fields to slight reduce memory usage, however this
+  // may lead to slower access.
+  //
+  // StreamingType type : 7;
+  // bool use_thread_pool : 1;
+  StreamingType type;
   bool use_thread_pool;
 };
 
@@ -500,7 +505,7 @@ void run_asio_server(CppAsioServer* server,
   for (HsInt i = 0; i < method_handlers_total_len; ++i) {
     server->method_handlers_.emplace(std::make_pair(
         std::string(method_handlers[i], method_handlers_len[i]),
-        hsgrpc::HandlerInfo{hsgrpc::StreamingType(method_handlers_type[i]), i,
+        hsgrpc::HandlerInfo{i, hsgrpc::StreamingType(method_handlers_type[i]),
                             method_handlers_use_thread_pool[i]}));
   }
 
