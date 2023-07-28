@@ -96,7 +96,7 @@ library
     -DASIO_HAS_CO_AWAIT -DASIO_HAS_STD_COROUTINE
 
   if flag(useprotosuite)
-    build-depends: proto3-suite ^>=0.5
+    build-depends: proto3-suite >=0.5 && <0.7
     cpp-options:   -DHSGRPC_USE_PROTOSUITE
 
   include-dirs:
