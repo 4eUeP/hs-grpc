@@ -1,4 +1,4 @@
-cabal-version:      2.4
+cabal-version:      3.6
 name:               hs-grpc-example
 version:            0.1.0.0
 synopsis:           Examples for hs-grpc
@@ -23,6 +23,22 @@ custom-setup
     , Cabal             >=2.4  && <4
     , proto-lens-setup  ^>=0.4
 
+-- FIXME: Support to build with template-haskell
+flag hsgrpc_enable_asan
+  default:     False
+  description: Enable AddressSanitizer.
+
+-- XXX: Tricky options to link static archive, see: https://github.com/haskell/cabal/issues/4677
+common link-asan
+  if os(osx)
+    ghc-options: "-optl-Wl,-lasan"
+
+  if !os(osx)
+    ghc-options:
+      -pgml g++ "-optl-Wl,--allow-multiple-definition"
+      "-optl-Wl,--whole-archive" "-optl-Wl,-Bstatic" "-optl-Wl,-lasan"
+      "-optl-Wl,-Bdynamic" "-optl-Wl,--no-whole-archive"
+
 library
   build-depends:
     , base                >=4.13 && <5
@@ -42,6 +58,9 @@ library
     -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
 
 executable simple-server
+  if flag(hsgrpc_enable_asan)
+    import: link-asan
+
   hs-source-dirs:   app
   main-is:          simple-server.hs
   build-depends:
@@ -60,6 +79,9 @@ executable simple-server
     -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -qg -qn1"
 
 executable server-interceptor
+  if flag(hsgrpc_enable_asan)
+    import: link-asan
+
   hs-source-dirs:   app
   main-is:          server_interceptors.hs
   build-depends:

@@ -16,6 +16,10 @@
 #include <grpc/support/log.h>
 #include <grpcpp/server_builder.h>
 
+#ifdef HSGRPC_ENABLE_ASAN
+#include <sanitizer/lsan_interface.h>
+#endif
+
 namespace hsgrpc {
 // ----------------------------------------------------------------------------
 
@@ -540,6 +544,9 @@ void shutdown_asio_server(CppAsioServer* server) {
 void delete_asio_server(CppAsioServer* server) {
   gpr_log(GPR_DEBUG, "Delete allocated server");
   delete server;
+#ifdef HSGRPC_ENABLE_ASAN
+  __lsan_do_leak_check();
+#endif
 }
 
 // ----------------------------------------------------------------------------
