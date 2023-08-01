@@ -28,10 +28,9 @@ source-repository head
   type:     git
   location: https://github.com/4eUeP/hs-grpc
 
--- TODO: rename to use_protosuite
-flag UseProtoSuite
+flag hsgrpc_use_protosuite
   default:     False
-  description: Use proto3-suite as encoding & decoding
+  description: Use proto3-suite as encoder & decoder
 
 common common-lang
   default-language:   Haskell2010
@@ -95,10 +94,6 @@ library
     -std=c++17 -Werror=switch -fcoroutines -DAGRPC_STANDALONE_ASIO
     -DASIO_HAS_CO_AWAIT -DASIO_HAS_STD_COROUTINE
 
-  if flag(useprotosuite)
-    build-depends: proto3-suite >=0.5 && <0.7
-    cpp-options:   -DHSGRPC_USE_PROTOSUITE
-
   include-dirs:
     external/asio/asio/include external/asio-grpc/src include
     /usr/local/include
@@ -111,6 +106,10 @@ library
     gpr
     grpc++_reflection
     protobuf
+
+  if flag(hsgrpc_use_protosuite)
+    build-depends: proto3-suite >=0.5 && <0.7
+    cpp-options:   -DHSGRPC_USE_PROTOSUITE
 
 test-suite hs-grpc-server-test
   import:             common-lang
