@@ -118,8 +118,9 @@ library
 
   if flag(hsgrpc_enable_asan)
     hsc2hs-options:
-      "--cflag=-fsanitize=address" "--cflag=-static-libasan"
-      "--lflag=-fsanitize=address" "--lflag=-static-libasan"
+      "--cflag=-fsanitize=address" "--cflag=-fno-omit-frame-pointer"
+      "--cflag=-static-libasan" "--lflag=-fsanitize=address"
+      "--lflag=-fno-omit-frame-pointer" "--lflag=-static-libasan"
 
     cxx-options:
       -fsanitize=address -fno-omit-frame-pointer -DHSGRPC_ENABLE_ASAN
