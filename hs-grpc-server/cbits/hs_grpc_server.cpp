@@ -9,7 +9,6 @@
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
 #include <asio/bind_executor.hpp>
-#include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/thread_pool.hpp>
