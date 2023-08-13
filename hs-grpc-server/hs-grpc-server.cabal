@@ -95,8 +95,9 @@ library
     "--cc=g++" "--lflag=-lstdc++" "--cflag=-D__HSC2HS__=1"
     "--cflag=-std=c++17"
 
+  cc-options:         -O3
   cxx-options:
-    -std=c++17 -Werror=switch -fcoroutines -DAGRPC_STANDALONE_ASIO
+    -O3 -std=c++17 -Werror=switch -fcoroutines -DAGRPC_STANDALONE_ASIO
     -DASIO_HAS_CO_AWAIT -DASIO_HAS_STD_COROUTINE
 
   include-dirs:
