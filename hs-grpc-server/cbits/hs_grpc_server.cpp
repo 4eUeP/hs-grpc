@@ -19,6 +19,19 @@
 #include <sanitizer/lsan_interface.h>
 #endif
 
+#ifdef HSGRPC_DMEM
+static std::atomic_int bidistream_in_chan_counter = 0;
+static std::atomic_int bidistream_out_chan_counter = 0;
+
+void print_dmem(const char* fmt, ...) {
+  auto fmt_ = std::string("=== [DMEM] ") + std::string(fmt);
+  va_list args;
+  va_start(args, fmt);
+  vfprintf(stderr, fmt_.c_str(), args);
+  va_end(args);
+}
+#endif
+
 namespace hsgrpc {
 // ----------------------------------------------------------------------------
 
@@ -338,10 +351,36 @@ struct HsAsioHandler {
     // function on the cpp side, another is the haskell side. Thus, the stored
     // obj in the shared_ptr is freed while both handleBidiStreaming and haskell
     // ForeignPtr are exited.
+#ifdef HSGRPC_DMEM
+    auto channelIn_ =
+        new ChannelIn{co_await asio::this_coro::executor, max_buffer_size};
+    ++bidistream_in_chan_counter;
+    print_dmem("new bidistream_in_chan_counter %p %d\n", channelIn_,
+               bidistream_in_chan_counter.load());
+    std::shared_ptr<ChannelIn> cpp_channel_in(channelIn_, [&](ChannelIn* ptr) {
+      delete ptr;
+      --bidistream_in_chan_counter;
+      print_dmem("delete bidistream_in_chan_counter %p %d\n", ptr,
+                 bidistream_in_chan_counter.load());
+    });
+    auto channelOut_ =
+        new ChannelOut{co_await asio::this_coro::executor, max_buffer_size};
+    ++bidistream_out_chan_counter;
+    print_dmem("new bidistream_out_chan_counter %p %d\n", channelOut_,
+               bidistream_out_chan_counter.load());
+    std::shared_ptr<ChannelOut> cpp_channel_out(
+        channelOut_, [&](ChannelOut* ptr) {
+          --bidistream_out_chan_counter;
+          print_dmem("delete bidistream_out_chan_counter %p %d\n", ptr,
+                     bidistream_out_chan_counter.load());
+          delete ptr;
+        });
+#else
     auto cpp_channel_in = std::make_shared<ChannelIn>(
         co_await asio::this_coro::executor, max_buffer_size);
     auto cpp_channel_out = std::make_shared<ChannelOut>(
         co_await asio::this_coro::executor, max_buffer_size);
+#endif
     auto hs_channel_in =
         new channel_in_t{cpp_channel_in}; // delete by haskell gc
     auto hs_channel_out =

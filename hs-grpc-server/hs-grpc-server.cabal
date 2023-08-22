@@ -37,6 +37,10 @@ flag hsgrpc_enable_asan
   description:
     Enable AddressSanitizer. See hs-grpc-example for an example usage.
 
+flag hsgrpc_dmem
+  default:     False
+  description: Some internal statistics and self-checks for memory usage.
+
 common common-lang
   default-language:   Haskell2010
   default-extensions:
@@ -125,6 +129,10 @@ library
     cxx-options:
       -fsanitize=address -fno-omit-frame-pointer -DHSGRPC_ENABLE_ASAN
       -static-libasan
+
+  if flag(hsgrpc_dmem)
+    cpp-options: -DHSGRPC_DMEM
+    cxx-options: -DHSGRPC_DMEM
 
 test-suite hs-grpc-server-test
   import:             common-lang
