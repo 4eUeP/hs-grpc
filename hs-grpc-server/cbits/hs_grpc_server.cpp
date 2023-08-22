@@ -140,6 +140,7 @@ struct StreamChannel {
         gpr_log(GPR_DEBUG,
                 "Close ChannelIn since we exit StreamChannel writer");
         channel_in->cancel();
+        channel_in->close();
       }
       co_await finishGrpc(reader_writer, response);
     }
