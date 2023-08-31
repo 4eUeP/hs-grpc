@@ -4,10 +4,6 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs                  #-}
 {-# LANGUAGE TypeFamilies           #-}
--- Indeed, some constraints are needed but ghc thinks not. e.g.
---
--- (MethodInput s m ~ i, MethodOutput s m ~ o) in unary
-{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 module HsGrpc.Server
   ( GRPC (..)
@@ -53,8 +49,7 @@ import qualified Data.ByteString.Char8         as BSC
 import           Data.ByteString.Short         (ShortByteString)
 import           Data.Kind                     (Type)
 import           Data.Maybe                    (fromMaybe)
-import           Data.ProtoLens.Service.Types  (HasMethod, MethodInput,
-                                                MethodName, MethodOutput,
+import           Data.ProtoLens.Service.Types  (HasMethod, MethodName,
                                                 Service (..))
 import           Data.Proxy                    (Proxy (..))
 import qualified Data.Text                     as Text
@@ -242,11 +237,16 @@ data ServiceHandler = ServiceHandler
 handlerUseThreadPool :: ServiceHandler -> ServiceHandler
 handlerUseThreadPool handler = handler{rpcUseThreadPool = True}
 
+-- Since proto3-suit does not support MethodInput&MethodOutput constraints,
+-- there is no easy way to add the following:
+--
+-- unary
+--   :: ( HasMethod s m, Message i, Message o
+--      , MethodInput s m ~ i
+--      , MethodOutput s m ~ o
+--      ) => ...
 unary
-  :: ( HasMethod s m, Message i, Message o
-     , MethodInput s m ~ i
-     , MethodOutput s m ~ o
-     )
+  :: (HasMethod s m, Message i, Message o)
   => GRPC s m
   -> UnaryHandler i o
   -> ServiceHandler
@@ -257,10 +257,7 @@ unary grpc handler =
                 }
 
 shortUnary
-  :: ( HasMethod s m, Message i, Message o
-     , MethodInput s m ~ i
-     , MethodOutput s m ~ o
-     )
+  :: (HasMethod s m, Message i, Message o)
   => GRPC s m
   -> UnaryHandler i o
   -> ServiceHandler
@@ -271,10 +268,7 @@ shortUnary grpc handler =
                 }
 
 clientStream
-  :: ( HasMethod s m, Message i, Message o
-     , MethodInput s m ~ i
-     , MethodOutput s m ~ o
-     )
+  :: (HasMethod s m, Message i, Message o)
   => GRPC s m
   -> ClientStreamHandler i o
   -> ServiceHandler
@@ -285,10 +279,7 @@ clientStream grpc handler =
                 }
 
 serverStream
-  :: ( HasMethod s m, Message i, Message o
-     , MethodInput s m ~ i
-     , MethodOutput s m ~ o
-     )
+  :: (HasMethod s m, Message i, Message o)
   => GRPC s m
   -> ServerStreamHandler i o a
   -> ServiceHandler
@@ -299,10 +290,7 @@ serverStream grpc handler =
                 }
 
 bidiStream
-  :: ( HasMethod s m, Message i, Message o
-     , MethodInput s m ~ i
-     , MethodOutput s m ~ o
-     )
+  :: (HasMethod s m, Message i, Message o)
   => GRPC s m
   -> BidiStreamHandler i o a
   -> ServiceHandler
