@@ -15,6 +15,12 @@ using ChannelIn =
 using ChannelOut = asio::experimental::concurrent_channel<void(
     asio::error_code, grpc::ByteBuffer)>;
 
+// FIXME: use a lightweight structure instead (a real coroutine lock)
+//
+// Using bool for convenience, this can be any type actually.
+using CoroLock =
+    asio::experimental::concurrent_channel<void(asio::error_code, bool)>;
+
 struct channel_in_t {
   std::shared_ptr<ChannelIn> rep;
 };
@@ -52,6 +58,7 @@ struct server_request_t {
   HsInt handler_idx;
   channel_in_t* channel_in = nullptr;
   channel_out_t* channel_out = nullptr;
+  CoroLock* coro_lock = nullptr;
   grpc::GenericServerContext* server_context = nullptr;
 };
 

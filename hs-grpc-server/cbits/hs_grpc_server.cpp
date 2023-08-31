@@ -157,6 +157,7 @@ struct HandlerInfo {
   // bool use_thread_pool : 1;
   StreamingType type;
   bool use_thread_pool;
+  bool is_short_unary;
 };
 
 struct HsAsioHandler {
@@ -169,7 +170,7 @@ struct HsAsioHandler {
   handleUnary(grpc::GenericServerContext& server_context,
               grpc::GenericServerAsyncReaderWriter& reader_writer,
               server_request_t& request, server_response_t& response,
-              bool use_thread_pool) {
+              bool use_thread_pool, bool is_short_unary) {
     // Wait for the request message
     grpc::ByteBuffer buffer;
     bool read_ok = co_await agrpc::read(reader_writer, buffer);
@@ -193,12 +194,24 @@ struct HsAsioHandler {
     request.data_size = slice.size();
     request.server_context = &server_context;
 
-    if (use_thread_pool) {
-      co_await asio::post(
-          asio::bind_executor(thread_pool, asio::use_awaitable));
+    if (is_short_unary) {
+      if (use_thread_pool) {
+        co_await asio::post(
+            asio::bind_executor(thread_pool, asio::use_awaitable));
+      }
+      //  Call haskell handler
+      (*callback)(&request, &response);
+    } else {
+      // FIXME: use a lightweight structure instead (a real coroutine lock)
+      auto coro_lock = CoroLock(co_await asio::this_coro::executor, 1);
+      request.coro_lock = &coro_lock;
+
+      //  Call haskell handler
+      (*callback)(&request, &response);
+
+      const auto [ec, _] =
+          co_await coro_lock.async_receive(asio::as_tuple(asio::use_awaitable));
     }
-    // Call haskell handler
-    (*callback)(&request, &response);
 
     // Return to client
     auto status_code = static_cast<grpc::StatusCode>(response.status_code);
@@ -375,7 +388,8 @@ struct HsAsioHandler {
       switch (method_handler_->second.type) {
         case StreamingType::NonStreaming: {
           co_await handleUnary(server_context, reader_writer, request, response,
-                               method_handler_->second.use_thread_pool);
+                               method_handler_->second.use_thread_pool,
+                               method_handler_->second.is_short_unary);
           break;
         }
         case StreamingType::BiDiStreaming: {
@@ -501,6 +515,7 @@ void run_asio_server(CppAsioServer* server,
                      char** method_handlers, HsInt* method_handlers_len,
                      uint8_t* method_handlers_type,
                      bool* method_handlers_use_thread_pool,
+                     bool* method_handlers_is_short_unary,
                      HsInt method_handlers_total_len,
                      // method handlers end
                      hsgrpc::HsCallback callback, int fd_on_started,
@@ -510,7 +525,8 @@ void run_asio_server(CppAsioServer* server,
     server->method_handlers_.emplace(std::make_pair(
         std::string(method_handlers[i], method_handlers_len[i]),
         hsgrpc::HandlerInfo{i, hsgrpc::StreamingType(method_handlers_type[i]),
-                            method_handlers_use_thread_pool[i]}));
+                            method_handlers_use_thread_pool[i],
+                            method_handlers_is_short_unary[i]}));
   }
 
   auto parallelism = server->server_threads_.capacity();
@@ -543,6 +559,10 @@ void shutdown_asio_server(CppAsioServer* server) {
 
 void delete_asio_server(CppAsioServer* server) {
   gpr_log(GPR_DEBUG, "Delete allocated server");
+  // FIXME: The delete_asio_server function is invoked by the Haskell garbage
+  // collector. In the presence of a C++ thread(server->server_threads_) that
+  // hasn't been properly joined, an error of "terminate called without an
+  // active exception" can occur.
   delete server;
 #ifdef HSGRPC_ENABLE_ASAN
   __lsan_do_leak_check();
@@ -602,6 +622,17 @@ void close_out_channel(hsgrpc::channel_out_t* channel) {
 void delete_out_channel(hsgrpc::channel_out_t* channel) {
   gpr_log(GPR_DEBUG, "Delete out channel.");
   delete channel;
+}
+
+void release_corolock(hsgrpc::CoroLock* channel, HsStablePtr mvar, HsInt cap,
+                      HsInt* ret_code) {
+  if (channel) {
+    channel->async_send(asio::error_code{}, true,
+                        [cap, mvar, ret_code](asio::error_code ec) {
+                          *ret_code = (HsInt)ec.value();
+                          hs_try_putmvar(cap, mvar);
+                        });
+  }
 }
 
 // ----------------------------------------------------------------------------

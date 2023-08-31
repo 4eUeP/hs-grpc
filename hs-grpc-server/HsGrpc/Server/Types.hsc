@@ -58,6 +58,8 @@ module HsGrpc.Server.Types
   , Request (..)
   , Response (..)
   , defResponse
+  , CoroLock
+  , releaseCoroLock
     -- ** StreamingType
   , StreamingType (..)
   , pattern C_StreamingType_NonStreaming
@@ -83,7 +85,9 @@ import           Data.Word                     (Word64, Word8)
 import           Foreign.Marshal.Alloc         (allocaBytesAligned)
 import           Foreign.Ptr                   (FunPtr, Ptr, freeHaskellFunPtr,
                                                 nullPtr)
+import           Foreign.StablePtr             (StablePtr)
 import           Foreign.Storable              (Storable (..))
+import           GHC.Conc                      (PrimMVar)
 import qualified HsForeign                     as HF
 
 import           HsGrpc.Common.Foreign.Channel
@@ -143,11 +147,23 @@ withProcessorCallback cb = bracket (mkProcessorCallback cb) freeHaskellFunPtr
 
 -------------------------------------------------------------------------------
 
+newtype CoroLock = CoroLock (Ptr ())
+  deriving (Show)
+
+-- CoroLock should never be NULL. However, I recheck it inside the c function.
+releaseCoroLock :: CoroLock -> IO Int
+releaseCoroLock lock = HF.withPrimAsyncFFI @Int (release_corolock lock)
+
+foreign import ccall unsafe "release_corolock"
+  release_corolock
+    :: CoroLock -> StablePtr PrimMVar -> Int -> Ptr Int -> IO ()
+
 data Request = Request
   { requestPayload       :: ByteString
   , requestHandlerIdx    :: Int
   , requestReadChannel   :: Maybe ChannelIn
   , requestWriteChannel  :: Maybe ChannelOut
+  , requestCoroLock      :: CoroLock
   , requestServerContext :: ServerContext
   } deriving (Show)
 
@@ -170,11 +186,13 @@ instance Storable Request where
       (#peek hsgrpc::server_request_t, channel_in) ptr
     channelOut <- peekMaybeCppChannelOut =<<
       (#peek hsgrpc::server_request_t, channel_out) ptr
+    coroLock <- (#peek hsgrpc::server_request_t, coro_lock) ptr
     serverContext <- (#peek hsgrpc::server_request_t, server_context) ptr
     return $ Request{ requestPayload       = payload
                     , requestHandlerIdx    = handleIdx
                     , requestReadChannel   = channelIn
                     , requestWriteChannel  = channelOut
+                    , requestCoroLock      = CoroLock coroLock
                     , requestServerContext = ServerContext serverContext
                     }
   poke _ptr _req = error "Request is not pokeable"

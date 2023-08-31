@@ -45,6 +45,8 @@ foreign import ccall safe "run_asio_server"
     -- ^ Value of method_handlers: StreamingType
     -> Ptr CBool
     -- ^ Value of method_handlers: use_thread_pool
+    -> Ptr CBool
+    -- ^ Value of method_handlers: is_short_unary
     -> Int
     -- ^ Total size of method_handlers
     -> FunPtr ProcessorCallback

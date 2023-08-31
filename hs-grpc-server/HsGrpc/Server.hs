@@ -22,6 +22,7 @@ module HsGrpc.Server
   , BidiStreamHandler
   , ServiceHandler
   , unary
+  , shortUnary
   , clientStream
   , serverStream
   , bidiStream
@@ -141,12 +142,13 @@ runAsioGrpc server handlers onStarted maxBufferSize =
   HF.withByteStringList (map rpcMethod handlers) $ \ms' ms_len' total_len ->
   HF.withPrimList (map (handlerCStreamingType . rpcHandler) handlers) $ \mt' _mt_len ->
   HF.withPrimList (map (fromBool . rpcUseThreadPool) handlers) $ \mUseThread' _ ->
+  HF.withPrimList (map (fromBool . isShortUnary . rpcHandler) handlers) $ \mIsShortUnary' _ ->
   -- handlers callback
   withProcessorCallback (processorCallback $ map rpcHandler handlers) $ \cbPtr -> do
     evm <- getSystemEventManager' $ ServerException "failed to get event manager"
     withFdEventNotification evm onStarted OneShot $ \(Fd cfdOnStarted) -> do
       let start = run_asio_server server_ptr
-                                  ms' ms_len' mt' mUseThread' total_len
+                                  ms' ms_len' mt' mUseThread' mIsShortUnary' total_len
                                   cbPtr
                                   cfdOnStarted
                                   (fromIntegral maxBufferSize)
@@ -202,6 +204,8 @@ type BidiStreamHandler i o a = ServerContext -> BidiStream i o -> IO a
 data RpcHandler where
   UnaryHandler
     :: (Message i, Message o) => UnaryHandler i o -> RpcHandler
+  ShortUnaryHandler
+    :: (Message i, Message o) => UnaryHandler i o -> RpcHandler
   ClientStreamHandler
     :: (Message i, Message o) => ClientStreamHandler i o -> RpcHandler
   ServerStreamHandler
@@ -211,12 +215,18 @@ data RpcHandler where
 
 instance Show RpcHandler where
   show (UnaryHandler _)        = "<UnaryHandler>"
+  show (ShortUnaryHandler _)   = "<ShortUnaryHandler>"
   show (ClientStreamHandler _) = "<ClientStreamHandler>"
   show (ServerStreamHandler _) = "<ServerStreamHandler>"
   show (BidiStreamHandler _)   = "<BidiStreamHandler>"
 
+isShortUnary :: RpcHandler -> Bool
+isShortUnary (ShortUnaryHandler _) = True
+isShortUnary _                     = False
+
 handlerCStreamingType :: RpcHandler -> Word8
 handlerCStreamingType (UnaryHandler _)        = C_StreamingType_NonStreaming
+handlerCStreamingType (ShortUnaryHandler _)   = C_StreamingType_NonStreaming
 handlerCStreamingType (ClientStreamHandler _) = C_StreamingType_ClientStreaming
 handlerCStreamingType (ServerStreamHandler _) = C_StreamingType_ServerStreaming
 handlerCStreamingType (BidiStreamHandler _)   = C_StreamingType_BiDiStreaming
@@ -243,6 +253,20 @@ unary
 unary grpc handler =
   ServiceHandler{ rpcMethod = getGrpcMethod grpc
                 , rpcHandler = UnaryHandler handler
+                , rpcUseThreadPool = False
+                }
+
+shortUnary
+  :: ( HasMethod s m, Message i, Message o
+     , MethodInput s m ~ i
+     , MethodOutput s m ~ o
+     )
+  => GRPC s m
+  -> UnaryHandler i o
+  -> ServiceHandler
+shortUnary grpc handler =
+  ServiceHandler{ rpcMethod = getGrpcMethod grpc
+                , rpcHandler = ShortUnaryHandler handler
                 , rpcUseThreadPool = False
                 }
 
@@ -296,7 +320,8 @@ processorCallback handlers request_ptr response_ptr = do
   -- the cpp side already makes the bound check
   let handler = handlers !! requestHandlerIdx req   -- TODO: use vector to gain O(1) access
   case handler of
-    UnaryHandler hd -> unaryCallback req hd response_ptr
+    UnaryHandler hd -> void $ forkIO $ unaryCallback req hd response_ptr
+    ShortUnaryHandler hd -> shortUnaryCallback req hd response_ptr
     ClientStreamHandler hd -> void $ forkIO $ clientStreamCallback req hd response_ptr
     ServerStreamHandler hd -> void $ forkIO $ serverStreamCallback req hd response_ptr
     BidiStreamHandler hd -> void $ forkIO $ bidiStreamCallback req hd response_ptr
@@ -304,14 +329,29 @@ processorCallback handlers request_ptr response_ptr = do
 unaryCallback
   :: (Message i, Message o)
   => Request -> UnaryHandler i o -> Ptr Response -> IO ()
-unaryCallback Request{..} hd response_ptr = catchGrpcError response_ptr $ do
+unaryCallback Request{..} hd response_ptr =
+  void $ catchGrpcError' response_ptr clean action
+    where
+      action = do
+        let e_requestMsg = decodeMessage requestPayload
+        case e_requestMsg of
+          Left errmsg -> parsingReqErrReply response_ptr (BSC.pack errmsg)
+          Right requestMsg -> do
+            replyBs <- encodeMessage <$> hd requestServerContext requestMsg
+            poke response_ptr defResponse{responseData = Just replyBs}
+      clean = do
+        void $ releaseCoroLock requestCoroLock
+
+shortUnaryCallback
+  :: (Message i, Message o)
+  => Request -> UnaryHandler i o -> Ptr Response -> IO ()
+shortUnaryCallback Request{..} hd response_ptr = catchGrpcError response_ptr $ do
   let e_requestMsg = decodeMessage requestPayload
   case e_requestMsg of
     Left errmsg -> parsingReqErrReply response_ptr (BSC.pack errmsg)
     Right requestMsg -> do
       replyBs <- encodeMessage <$> hd requestServerContext requestMsg
       poke response_ptr defResponse{responseData = Just replyBs}
-{-# INLINABLE unaryCallback #-}
 
 clientStreamCallback
   :: (Message o)
