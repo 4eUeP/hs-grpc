@@ -85,10 +85,10 @@ import           Data.Word                     (Word64, Word8)
 import           Foreign.Marshal.Alloc         (allocaBytesAligned)
 import           Foreign.Ptr                   (FunPtr, Ptr, freeHaskellFunPtr,
                                                 nullPtr)
-import           Foreign.StablePtr             (StablePtr)
 import           Foreign.Storable              (Storable (..))
-import           GHC.Conc                      (PrimMVar)
 import qualified HsForeign                     as HF
+import           Foreign.StablePtr             (StablePtr)
+import           GHC.Conc                      (PrimMVar)
 
 import           HsGrpc.Common.Foreign.Channel
 import           HsGrpc.Server.Internal.Types
@@ -105,7 +105,10 @@ data ServerOptions = ServerOptions
   , serverOnStarted    :: !(Maybe (IO ()))
   , serverInterceptors :: ![ServerInterceptor]
     -- The following options are considering as internal
-  , serverInternalChannelSize :: !Word
+  , serverInternalChannelSize :: {-# UNPACK #-} !Word
+  , serverMaxUnaryTime        :: {-# UNPACK #-} !Int
+    -- ^ Milliseconds, unary that take more than this time will return a
+    -- StatusDeadlineExceeded to the client.
   }
 
 defaultServerOpts :: ServerOptions
@@ -117,6 +120,7 @@ defaultServerOpts = ServerOptions
   , serverOnStarted = Nothing
   , serverInterceptors = []
   , serverInternalChannelSize = 2
+  , serverMaxUnaryTime = 30 * 1000
   }
 
 instance Show ServerOptions where
@@ -150,13 +154,15 @@ withProcessorCallback cb = bracket (mkProcessorCallback cb) freeHaskellFunPtr
 newtype CoroLock = CoroLock (Ptr ())
   deriving (Show)
 
--- CoroLock should never be NULL. However, I recheck it inside the c function.
 releaseCoroLock :: CoroLock -> IO Int
 releaseCoroLock lock = HF.withPrimAsyncFFI @Int (release_corolock lock)
 
 foreign import ccall unsafe "release_corolock"
   release_corolock
     :: CoroLock -> StablePtr PrimMVar -> Int -> Ptr Int -> IO ()
+
+--foreign import ccall unsafe "release_corolock"
+--  releaseCoroLock :: CoroLock -> IO ()
 
 data Request = Request
   { requestPayload       :: ByteString

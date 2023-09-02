@@ -178,6 +178,7 @@ struct HsAsioHandler {
   HsCallback& callback;
   asio::thread_pool& thread_pool;
   size_t max_buffer_size;
+  HsInt max_unary_time;
 
   asio::awaitable<void>
   handleUnary(grpc::GenericServerContext& server_context,
@@ -215,15 +216,38 @@ struct HsAsioHandler {
       //  Call haskell handler
       (*callback)(&request, &response);
     } else {
-      // FIXME: use a lightweight structure instead (a real coroutine lock)
-      auto coro_lock = CoroLock(co_await asio::this_coro::executor, 1);
+      // grpc::Alarm coro_lock;
+      // request.coro_lock = &coro_lock;
+      //(*callback)(&request, &response);
+      // bool deadline_exceeded = co_await agrpc::wait(
+      //     coro_lock, std::chrono::system_clock::now() +
+      //                    std::chrono::milliseconds(max_unary_time));
+
+      // asio::steady_timer coro_lock(co_await asio::this_coro::executor,
+      //                              std::chrono::seconds(10));
+      // request.coro_lock = &coro_lock;
+      //(*callback)(&request, &response);
+      // auto deadline_exceeded =
+      //     co_await coro_lock.async_wait(asio::as_tuple(asio::use_awaitable));
+
+      auto coro_lock = CoroLock(co_await asio::this_coro::executor, 0);
       request.coro_lock = &coro_lock;
-
-      //  Call haskell handler
       (*callback)(&request, &response);
-
+      printf("wait------------\n");
       const auto [ec, _] =
           co_await coro_lock.async_receive(asio::as_tuple(asio::use_awaitable));
+      printf("wait done------------\n");
+
+      // if (deadline_exceeded) {
+      //   // if (after_cb) {
+      //   //   (void)(*after_cb)();
+      //   //   hs_free_fun_ptr(after_cb);
+      //   // }
+      //   co_await agrpc::finish(reader_writer,
+      //                          grpc::Status(grpc::StatusCode::DEADLINE_EXCEEDED,
+      //                                       "Unary deadline exceeded!"));
+      //   co_return;
+      // }
     }
 
     // Return to client
@@ -558,7 +582,7 @@ void run_asio_server(CppAsioServer* server,
                      HsInt method_handlers_total_len,
                      // method handlers end
                      hsgrpc::HsCallback callback, int fd_on_started,
-                     size_t max_buffer_size) {
+                     size_t max_buffer_size, HsInt max_unary_time) {
   server->method_handlers_.reserve(method_handlers_total_len);
   for (HsInt i = 0; i < method_handlers_total_len; ++i) {
     server->method_handlers_.emplace(std::make_pair(
@@ -576,10 +600,10 @@ void run_asio_server(CppAsioServer* server,
       auto& grpc_context = *std::next(server->grpc_contexts_.begin(), i);
       agrpc::repeatedly_request(
           server->service_,
-          asio::bind_executor(grpc_context,
-                              hsgrpc::HsAsioHandler{server->method_handlers_,
-                                                    callback, thread_pool,
-                                                    max_buffer_size}));
+          asio::bind_executor(
+              grpc_context, hsgrpc::HsAsioHandler{
+                                server->method_handlers_, callback, thread_pool,
+                                max_buffer_size, max_unary_time}));
       grpc_context.run();
     });
   }
@@ -663,12 +687,19 @@ void delete_out_channel(hsgrpc::channel_out_t* channel) {
   delete channel;
 }
 
+// void release_corolock(hsgrpc::CoroLock* corolock) {
+//   if (corolock) {
+//     // corolock->Cancel();
+//     corolock->cancel();
+//   }
+// }
 void release_corolock(hsgrpc::CoroLock* channel, HsStablePtr mvar, HsInt cap,
                       HsInt* ret_code) {
   if (channel) {
     channel->async_send(asio::error_code{}, true,
                         [cap, mvar, ret_code](asio::error_code ec) {
                           *ret_code = (HsInt)ec.value();
+                          printf("--%d\n", *ret_code);
                           hs_try_putmvar(cap, mvar);
                         });
   }

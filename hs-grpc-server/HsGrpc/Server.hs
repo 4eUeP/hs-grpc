@@ -97,7 +97,10 @@ runServer ServerOptions{..} handlers = do
   server <- newAsioServer
               serverHost serverPort serverParallelism
               serverSslOptions serverInterceptors
-  runAsioGrpc server handlers serverOnStarted serverInternalChannelSize
+  runAsioGrpc server
+              handlers
+              serverOnStarted
+              serverInternalChannelSize serverMaxUnaryTime
 
 -------------------------------------------------------------------------------
 
@@ -130,8 +133,10 @@ runAsioGrpc
   -> Word
   -- ^ This is the buffer size of 'CppChannelIn' or 'CppChannelOut' used for
   -- streaming rpcs.
+  -> Int
+  -- ^ MaxUnaryTime
   -> IO ()
-runAsioGrpc server handlers onStarted maxBufferSize =
+runAsioGrpc server handlers onStarted maxBufferSize maxUnaryTime =
   withForeignPtr server $ \server_ptr ->
   -- handlers info
   HF.withByteStringList (map rpcMethod handlers) $ \ms' ms_len' total_len ->
@@ -147,6 +152,7 @@ runAsioGrpc server handlers onStarted maxBufferSize =
                                   cbPtr
                                   cfdOnStarted
                                   (fromIntegral maxBufferSize)
+                                  maxUnaryTime
           stop a = shutdown_asio_server server_ptr >> Async.wait a
        in Ex.bracket (Async.async start) stop Async.wait
 
@@ -308,11 +314,15 @@ processorCallback handlers request_ptr response_ptr = do
   -- the cpp side already makes the bound check
   let handler = handlers !! requestHandlerIdx req   -- TODO: use vector to gain O(1) access
   case handler of
-    UnaryHandler hd -> void $ forkIO $ unaryCallback req hd response_ptr
-    ShortUnaryHandler hd -> shortUnaryCallback req hd response_ptr
-    ClientStreamHandler hd -> void $ forkIO $ clientStreamCallback req hd response_ptr
-    ServerStreamHandler hd -> void $ forkIO $ serverStreamCallback req hd response_ptr
-    BidiStreamHandler hd -> void $ forkIO $ bidiStreamCallback req hd response_ptr
+    UnaryHandler hd -> do
+      void $ forkIO $ unaryCallback req hd response_ptr
+    ShortUnaryHandler hd -> void $ shortUnaryCallback req hd response_ptr
+    ClientStreamHandler hd ->
+      void $ forkIO $ clientStreamCallback req hd response_ptr
+    ServerStreamHandler hd ->
+      void $ forkIO $ serverStreamCallback req hd response_ptr
+    BidiStreamHandler hd ->
+      void $ forkIO $ bidiStreamCallback req hd response_ptr
 
 unaryCallback
   :: (Message i, Message o)
@@ -327,8 +337,7 @@ unaryCallback Request{..} hd response_ptr =
           Right requestMsg -> do
             replyBs <- encodeMessage <$> hd requestServerContext requestMsg
             poke response_ptr defResponse{responseData = Just replyBs}
-      clean = do
-        void $ releaseCoroLock requestCoroLock
+      clean = void $ releaseCoroLock requestCoroLock
 
 shortUnaryCallback
   :: (Message i, Message o)

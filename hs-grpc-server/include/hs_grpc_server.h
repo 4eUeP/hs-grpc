@@ -3,7 +3,9 @@
 #include <HsFFI.h>
 
 #include <asio/experimental/concurrent_channel.hpp>
+#include <asio/steady_timer.hpp>
 #include <cstdint>
+#include <grpcpp/alarm.h>
 #include <grpcpp/server.h>
 #include <grpcpp/support/slice.h>
 
@@ -16,8 +18,8 @@ using ChannelOut = asio::experimental::concurrent_channel<void(
     asio::error_code, grpc::ByteBuffer)>;
 
 // FIXME: use a lightweight structure instead (a real coroutine lock)
-//
-// Using bool for convenience, this can be any type actually.
+// using CoroLock = grpc::Alarm;
+// using CoroLock = asio::steady_timer;
 using CoroLock =
     asio::experimental::concurrent_channel<void(asio::error_code, bool)>;
 

@@ -52,4 +52,5 @@ foreign import ccall safe "run_asio_server"
     -> FunPtr ProcessorCallback
     -> CInt  -- ^ fd onStarted
     -> CSize -- ^ Max buffer size for the internal streaming channel
+    -> Int   -- ^ Max time of unary
     -> IO ()
