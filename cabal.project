@@ -1,3 +1,4 @@
 packages:
   ./hs-grpc-server/hs-grpc-server.cabal
   ./example/hs-grpc-example.cabal
+  ./tests/hs-grpc-tests.cabal

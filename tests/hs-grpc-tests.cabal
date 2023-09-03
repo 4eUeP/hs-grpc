@@ -1,0 +1,57 @@
+cabal-version:      2.4
+name:               hs-grpc-tests
+version:            0.1.0.0
+synopsis:           Tests for hs-grpc
+description:
+  Please see the README on Github at <https://github.com/4eUeP/hs-grpc#readme>
+
+build-type:         Custom
+extra-source-files: protos/*.proto
+
+custom-setup
+  setup-depends:
+    , base              >=4.5  && <5
+    , Cabal             >=2.4  && <4
+    , proto-lens-setup  ^>=0.4
+
+library
+  hs-source-dirs:   .
+  build-depends:
+    , base                >=4.13 && <5
+    , proto-lens-runtime
+
+  exposed-modules:
+    Proto.AsyncSchedule
+    Proto.AsyncSchedule_Fields
+
+  autogen-modules:
+    Proto.AsyncSchedule
+    Proto.AsyncSchedule_Fields
+
+  default-language: GHC2021
+
+common common-exe
+  hs-source-dirs:     cases
+  build-depends:
+    , base                >=4.13 && <5
+    , bytestring
+    , hs-grpc-server
+    , hs-grpc-tests
+    , microlens
+    , proto-lens
+    , proto-lens-runtime
+    , text
+
+  default-language:   GHC2021
+  default-extensions:
+    DataKinds
+    OverloadedStrings
+
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
+    -threaded -rtsopts -with-rtsopts=-N
+
+executable AsyncSchedule001_server
+  import:  common-exe
+  main-is: AsyncSchedule001_server.hs

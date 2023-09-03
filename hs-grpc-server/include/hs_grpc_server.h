@@ -17,7 +17,20 @@ using ChannelOut = asio::experimental::concurrent_channel<void(
 
 // FIXME: use a lightweight structure instead (a real coroutine lock)
 //
-// Using bool for convenience, this can be any type actually.
+// While using asio::steady_timer/grpc::Alarm appears to be a promising approach,
+// there are some notable concerns:
+//
+// 1. We must pass an additional Haskell function to C++ in order to halt the
+//    Haskell handler when the timer expires. This is necessary because the
+//    memory pass to Haskell handler resides on the stack, and this additional
+//    step can introduce some performance overhead.
+// 2. The cancellation function for the timer operates synchronously, which may
+//    not be as fast as I expected. Which means may not suitable for unsafe ffi.
+// 3. Testing in real applications has revealed instances of DEADLINE_EXCEEDED
+//    (client) and segfaults(server).
+// 4. Timer is also not lightweight enough.
+//
+// bool for convenience, this can be any type actually.
 using CoroLock =
     asio::experimental::concurrent_channel<void(asio::error_code, bool)>;
 
