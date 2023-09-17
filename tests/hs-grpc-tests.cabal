@@ -5,6 +5,11 @@ synopsis:           Tests for hs-grpc
 description:
   Please see the README on Github at <https://github.com/4eUeP/hs-grpc#readme>
 
+license:            BSD-3-Clause
+category:           Network
+maintainer:         mu@laxcat.xyz
+homepage:           https://github.com/4eUeP/hs-grpc
+bug-reports:        https://github.com/4eUeP/hs-grpc/issues
 build-type:         Custom
 extra-source-files: protos/*.proto
 
