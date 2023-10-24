@@ -483,6 +483,8 @@ CppAsioServer* new_asio_server(
     const char* host, HsInt host_len, HsInt port, HsInt parallelism,
     // ssl options
     hsgrpc::hs_ssl_server_credentials_options_t* ssl_server_opts,
+    // grpc channel args
+    hsgrpc::hs_grpc_channel_arg_t* grpc_chan_args, HsInt grpc_chan_args_size,
     // interceptors
     grpc::experimental::ServerInterceptorFactoryInterface** interceptor_facts,
     HsInt interceptors_size) {
@@ -527,6 +529,26 @@ CppAsioServer* new_asio_server(
   }
 
   builder.RegisterAsyncGenericService(&server_data->service_);
+
+  // Set grpc channel args
+  for (auto i = 0; i < grpc_chan_args_size; ++i) {
+    auto& arg = grpc_chan_args[i];
+    switch (arg.type) {
+      case hsgrpc::GrpcChannelArgValType::Int:
+        gpr_log(GPR_DEBUG, "AddChannelArgument: (%s, %d)", arg.key->c_str(),
+                arg.value.int_value);
+        builder.AddChannelArgument(*arg.key, arg.value.int_value);
+        delete arg.key;
+        break;
+      case hsgrpc::GrpcChannelArgValType::String:
+        gpr_log(GPR_DEBUG, "AddChannelArgument: (%s, %s)", arg.key->c_str(),
+                arg.value.string_value->c_str());
+        builder.AddChannelArgument(*arg.key, *arg.value.string_value);
+        delete arg.key;
+        delete arg.value.string_value;
+        break;
+    }
+  }
 
   if (interceptors_size > 0) {
     std::vector<

@@ -17,8 +17,8 @@ using ChannelOut = asio::experimental::concurrent_channel<void(
 
 // FIXME: use a lightweight structure instead (a real coroutine lock)
 //
-// While using asio::steady_timer/grpc::Alarm appears to be a promising approach,
-// there are some notable concerns:
+// While using asio::steady_timer/grpc::Alarm appears to be a promising
+// approach, there are some notable concerns:
 //
 // 1. We must pass an additional Haskell function to C++ in order to halt the
 //    Haskell handler when the timer expires. This is necessary because the
@@ -63,6 +63,17 @@ struct hs_ssl_server_credentials_options_t {
   HsInt pem_key_cert_pairs_size;
   // SslServerCredentialsOptions: client_certificate_request
   grpc_ssl_client_certificate_request_type client_certificate_request;
+};
+
+enum class GrpcChannelArgValType : uint8_t { Int, String };
+
+struct hs_grpc_channel_arg_t {
+  std::string* key;
+  GrpcChannelArgValType type;
+  union {
+    int int_value;
+    std::string* string_value;
+  } value;
 };
 
 struct server_request_t {

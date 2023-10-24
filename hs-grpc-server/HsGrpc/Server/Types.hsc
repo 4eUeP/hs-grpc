@@ -1,4 +1,6 @@
+{-# LANGUAGE BangPatterns    #-}
 {-# LANGUAGE CPP             #-}
+{-# LANGUAGE MagicHash       #-}
 {-# LANGUAGE PatternSynonyms #-}
 
 module HsGrpc.Server.Types
@@ -54,6 +56,17 @@ module HsGrpc.Server.Types
   , CServerInterceptorFactory
   , ServerInterceptor (..)
 
+    -- * Channel arguments
+  , ChannelArg
+  , ChanArgValue (..)
+  , mk_GRPC_ARG_KEEPALIVE_TIME_MS
+  , mk_GRPC_ARG_KEEPALIVE_TIMEOUT_MS
+  , mk_GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS
+  , mk_GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS
+  , mk_GRPC_ARG_HTTP2_MAX_PINGS_WITHOUT_DATA
+  , mk_GRPC_ARG_HTTP2_MAX_PING_STRIKES
+  , withChannelArgs  -- XXX: this function should be in a Internal module
+
     -- * Internal Types
   , Request (..)
   , Response (..)
@@ -75,6 +88,7 @@ module HsGrpc.Server.Types
   ) where
 
 import           Control.Exception             (Exception, bracket, throwIO)
+import           Control.Monad                 (forM_)
 import           Data.ByteString               (ByteString)
 import           Data.ByteString.Short         (ShortByteString)
 import qualified Data.ByteString.Unsafe        as BS
@@ -82,9 +96,10 @@ import           Data.Maybe                    (isJust)
 import           Data.ProtoLens.Service.Types  (StreamingType (..))
 import           Data.Text                     (Text)
 import           Data.Word                     (Word64, Word8)
-import           Foreign.Marshal.Alloc         (allocaBytesAligned)
-import           Foreign.Ptr                   (FunPtr, Ptr, freeHaskellFunPtr,
-                                                nullPtr)
+import           Foreign.C.Types
+import           Foreign.Marshal.Alloc
+import           Foreign.Marshal.Array
+import           Foreign.Ptr
 import           Foreign.StablePtr             (StablePtr)
 import           Foreign.Storable              (Storable (..))
 import           GHC.Conc                      (PrimMVar)
@@ -93,6 +108,7 @@ import qualified HsForeign                     as HF
 import           HsGrpc.Common.Foreign.Channel
 import           HsGrpc.Server.Internal.Types
 
+#include <grpc/grpc.h>
 #include "hs_grpc_server.h"
 
 -------------------------------------------------------------------------------
@@ -104,6 +120,7 @@ data ServerOptions = ServerOptions
   , serverSslOptions   :: !(Maybe SslServerCredentialsOptions)
   , serverOnStarted    :: !(Maybe (IO ()))
   , serverInterceptors :: ![ServerInterceptor]
+  , serverChannelArgs  :: ![ChannelArg]
     -- The following options are considering as internal
   , serverInternalChannelSize :: !Word
   }
@@ -116,6 +133,7 @@ defaultServerOpts = ServerOptions
   , serverSslOptions = Nothing
   , serverOnStarted = Nothing
   , serverInterceptors = []
+  , serverChannelArgs = []
   , serverInternalChannelSize = 2
   }
 
@@ -126,6 +144,7 @@ instance Show ServerOptions where
             <> "port: " <> show serverPort <> ", "
             <> "parallelism: " <> show serverParallelism <> ", "
             <> "sslOptions: " <> show serverSslOptions <> ", "
+            <> "channelArgs: " <> show serverChannelArgs <> ", "
             <> "onStartedEvent: " <> notifyFn serverOnStarted
      <> "}"
 
@@ -240,15 +259,10 @@ instance Storable Response where
     (#poke hsgrpc::server_response_t, data) ptr data_ptr
     (#poke hsgrpc::server_response_t, data_size) ptr data_size
     (#poke hsgrpc::server_response_t, status_code) ptr (unStatusCode responseStatusCode)
-    errmsg_ptr <- maybeNewStdString responseErrorMsg
+    errmsg_ptr <- HF.maybeNewStdString responseErrorMsg
     (#poke hsgrpc::server_response_t, error_msg) ptr errmsg_ptr
-    errdetails_ptr <- maybeNewStdString responseErrorDetails
+    errdetails_ptr <- HF.maybeNewStdString responseErrorDetails
     (#poke hsgrpc::server_response_t, error_details) ptr errdetails_ptr
-
--- TODO: upgrade foreign package to use HS.maybeNewStdString
-maybeNewStdString :: Maybe ByteString -> IO (Ptr HF.StdString)
-maybeNewStdString Nothing   = pure nullPtr
-maybeNewStdString (Just bs) = HF.withByteString bs $ HF.hs_new_std_string
 
 -------------------------------------------------------------------------------
 
@@ -467,6 +481,88 @@ newtype StatusCode = StatusCode { unStatusCode :: Int }
   , StatusDataLoss
   , StatusDoNotUse
   #-}
+
+-------------------------------------------------------------------------------
+-- Grpc channel arguments
+--
+-- https://grpc.github.io/grpc/core/group__grpc__arg__keys.html
+
+data ChanArgValue
+  = ChanArgValueInt CInt
+  | ChanArgValueString ShortByteString
+  deriving (Show, Eq)
+
+newtype ChannelArg = ChannelArg
+  { unChannelArg :: (ShortByteString, ChanArgValue) }
+  deriving (Eq)
+
+instance Show ChannelArg where
+  show (ChannelArg (key, ChanArgValueInt val)) =
+    "(" <> show key <> "," <> show val <> ")"
+  show (ChannelArg (key, ChanArgValueString val)) =
+    "(" <> show key <> "," <> show val <> ")"
+
+instance Storable ChannelArg where
+  sizeOf _ = (#size hsgrpc::hs_grpc_channel_arg_t)
+  alignment _ = (#alignment hsgrpc::hs_grpc_channel_arg_t)
+  peek _ptr = error "Unimplemented"
+  poke ptr (ChannelArg (key, val)) = do
+    key_ptr <- HF.newStdStringFromShort key  -- should be deleted on cpp side
+    (#poke hsgrpc::hs_grpc_channel_arg_t, key) ptr key_ptr
+    case val of
+      ChanArgValueInt i -> do
+        (#poke hsgrpc::hs_grpc_channel_arg_t, type)
+            ptr
+            ((#const static_cast<uint8_t>(hsgrpc::GrpcChannelArgValType::Int)) :: Word8)
+        (#poke hsgrpc::hs_grpc_channel_arg_t, value.int_value)
+            ptr i
+      ChanArgValueString s -> do
+        (#poke hsgrpc::hs_grpc_channel_arg_t, type)
+            ptr
+            ((#const static_cast<uint8_t>(hsgrpc::GrpcChannelArgValType::String)) :: Word8)
+        value_ptr <- HF.newStdStringFromShort s  -- should be deleted on cpp side
+        (#poke hsgrpc::hs_grpc_channel_arg_t, value.string_value) ptr value_ptr
+
+withChannelArgs :: [ChannelArg] -> (Ptr ChannelArg -> Int -> IO a) -> IO a
+withChannelArgs args f = do
+  let !len = length args
+  allocaArray @ChannelArg len $ \ptr -> do
+    forM_ (zip [0..len-1] args) $ \(i, arg) -> pokeElemOff ptr i arg
+    f ptr len
+
+#define hsc_mk_chan_args(c, vt, vw) \
+  hsc_printf("pattern %s :: ShortByteString\n", #c, #c);          \
+  hsc_printf("pattern %s = ", #c); hsc_const_str(c);              \
+  hsc_printf("\n");                                               \
+  hsc_printf("mk_%s :: %s -> ChannelArg\n", #c, #vt);             \
+  hsc_printf("mk_%s v = ChannelArg (%s, %s v)\n", #c, #c, #vw);
+
+-- | After a duration of this time the client/server pings its peer to see if
+-- the transport is still alive. Int valued, milliseconds.
+#mk_chan_args GRPC_ARG_KEEPALIVE_TIME_MS, CInt, ChanArgValueInt
+
+-- | After waiting for a duration of this time, if the keepalive ping sender
+-- does not receive the ping ack, it will close the transport. Int valued,
+-- milliseconds.
+#mk_chan_args GRPC_ARG_KEEPALIVE_TIMEOUT_MS, CInt, ChanArgValueInt
+
+-- | Is it permissible to send keepalive pings from the client without any
+-- outstanding streams. Int valued, 0(false)/1(true).
+#mk_chan_args GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, CInt, ChanArgValueInt
+
+-- | Minimum allowed time between a server receiving successive ping frames
+-- without sending any data/header frame. Int valued, milliseconds
+#mk_chan_args GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS, CInt, ChanArgValueInt
+
+-- | How many pings can the client send before needing to send a
+-- data/header frame? (0 indicates that an infinite number of
+-- pings can be sent without sending a data frame or header frame)
+#mk_chan_args GRPC_ARG_HTTP2_MAX_PINGS_WITHOUT_DATA, CInt, ChanArgValueInt
+
+-- | How many misbehaving pings the server can bear before sending goaway and
+-- closing the transport? (0 indicates that the server can bear an infinite
+-- number of misbehaving pings)
+#mk_chan_args GRPC_ARG_HTTP2_MAX_PING_STRIKES, CInt, ChanArgValueInt
 
 -------------------------------------------------------------------------------
 -- Interceptors
