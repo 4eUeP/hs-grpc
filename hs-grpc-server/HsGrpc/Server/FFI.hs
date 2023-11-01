@@ -24,6 +24,8 @@ foreign import ccall unsafe "new_asio_server"
     -- ^ parallelism
     -> Ptr SslServerCredentialsOptions
     -- ^ tls options
+    -> Ptr AuthTokens
+    -- ^ auth tokens
     -> Ptr ChannelArg -> Int
     -- ^ Grpc Channel arguments
     -> Ptr (Ptr CServerInterceptorFactory) -> Int

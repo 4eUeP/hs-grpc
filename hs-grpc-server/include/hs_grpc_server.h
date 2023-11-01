@@ -65,6 +65,17 @@ struct hs_ssl_server_credentials_options_t {
   grpc_ssl_client_certificate_request_type client_certificate_request;
 };
 
+// Basic auth tokens
+//
+// TODO: maybe we can support more types of tokens in the future
+//
+// enum class TokenType : uint8_t { Basic };
+struct hs_auth_tokens_t {
+  const char** datas;
+  HsInt* sizes;
+  HsInt len;
+};
+
 enum class GrpcChannelArgValType : uint8_t { Int, String };
 
 struct hs_grpc_channel_arg_t {

@@ -21,7 +21,8 @@ extra-source-files:
   external/asio/asio/include/**/*.ipp
   external/asio-grpc/src/**/*.hpp
   external/asio-grpc/src/**/*.ipp
-  include/*.h
+  include/**/*.h
+  include/**/*.hpp
   README.md
 
 source-repository head

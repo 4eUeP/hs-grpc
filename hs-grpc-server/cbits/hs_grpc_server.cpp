@@ -15,6 +15,8 @@
 #include <grpc/support/log.h>
 #include <grpcpp/server_builder.h>
 
+#include "hsgrpc/auth.hpp"
+
 #ifdef HSGRPC_ENABLE_ASAN
 #include <sanitizer/lsan_interface.h>
 #endif
@@ -483,29 +485,53 @@ CppAsioServer* new_asio_server(
     const char* host, HsInt host_len, HsInt port, HsInt parallelism,
     // ssl options
     hsgrpc::hs_ssl_server_credentials_options_t* ssl_server_opts,
+    // auth tokens
+    hsgrpc::hs_auth_tokens_t* auth_tokens_,
     // grpc channel args
     hsgrpc::hs_grpc_channel_arg_t* grpc_chan_args, HsInt grpc_chan_args_size,
-    // interceptors
+    // custom interceptors
     grpc::experimental::ServerInterceptorFactoryInterface** interceptor_facts,
     HsInt interceptors_size) {
+  // arg: server address
+  std::string server_address(std::string(host, host_len) + ":" +
+                             std::to_string(port));
+  // arg: auth tokens
+  std::set<std::string> auth_tokens;
+  if (auth_tokens_) {
+    for (auto i = 0; i < auth_tokens_->len; ++i) {
+      auth_tokens.emplace(auth_tokens_->datas[i], auth_tokens_->sizes[i]);
+    }
+  }
+
+  CppAsioServer* server_data = new CppAsioServer;
+  grpc::ServerBuilder builder;
+  std::vector<
+      std::unique_ptr<grpc::experimental::ServerInterceptorFactoryInterface>>
+      interceptors;
+
+  // Set concurrency
   const auto total_conc = std::thread::hardware_concurrency();
   if (parallelism <= 0 || parallelism > total_conc) {
     parallelism = total_conc;
   }
-  std::string server_address(std::string(host, host_len) + ":" +
-                             std::to_string(port));
-
-  CppAsioServer* server_data = new CppAsioServer;
   server_data->server_threads_.reserve(parallelism);
-
-  grpc::ServerBuilder builder;
-
   for (size_t i = 0; i < parallelism; ++i) {
     server_data->grpc_contexts_.emplace_front(builder.AddCompletionQueue());
   }
 
+  // Set server credentials
   if (!ssl_server_opts) {
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+    // Really insecure! Only for debugging usage
+    if (!auth_tokens.empty()) {
+      gpr_log(GPR_ERROR,
+              "!!! Using token with insecure server is meaningless !!!");
+      interceptors.push_back(
+          std::unique_ptr<
+              grpc::experimental::ServerInterceptorFactoryInterface>(
+              new hsgrpc::InsecureBasicAuthMetadataInterceptorFactory(
+                  auth_tokens)));
+    }
   } else {
     grpc::SslServerCredentialsOptions ssl_opts_;
     if (ssl_server_opts->pem_root_certs_data) {
@@ -525,6 +551,11 @@ CppAsioServer* new_asio_server(
         ssl_server_opts->client_certificate_request;
 
     auto channel_creds = grpc::SslServerCredentials(ssl_opts_);
+    if (!auth_tokens.empty()) {
+      auto processor = std::shared_ptr<grpc::AuthMetadataProcessor>(
+          new hsgrpc::BasicAuthMetadataProcessor(auth_tokens));
+      channel_creds->SetAuthMetadataProcessor(processor);
+    }
     builder.AddListeningPort(server_address, channel_creds);
   }
 
@@ -550,18 +581,20 @@ CppAsioServer* new_asio_server(
     }
   }
 
+  // Custom interceptors
   if (interceptors_size > 0) {
-    std::vector<
-        std::unique_ptr<grpc::experimental::ServerInterceptorFactoryInterface>>
-        creators;
     for (HsInt i = 0; i < interceptors_size; ++i) {
-      creators.push_back(std::unique_ptr<
-                         grpc::experimental::ServerInterceptorFactoryInterface>(
-          interceptor_facts[i]));
+      interceptors.push_back(
+          std::unique_ptr<
+              grpc::experimental::ServerInterceptorFactoryInterface>(
+              interceptor_facts[i]));
     }
-    builder.experimental().SetInterceptorCreators(std::move(creators));
   }
 
+  // Build and start
+  if (!interceptors.empty()) {
+    builder.experimental().SetInterceptorCreators(std::move(interceptors));
+  }
   server_data->server_ = builder.BuildAndStart();
   if (server_data->server_) {
     return server_data;
@@ -626,7 +659,9 @@ void delete_asio_server(CppAsioServer* server) {
   // active exception" can occur.
   delete server;
 #ifdef HSGRPC_ENABLE_ASAN
+  fprintf(stderr, "do_leak_check...\n");
   __lsan_do_leak_check();
+  fprintf(stderr, "do_leak_check done.\n");
 #endif
 }
 

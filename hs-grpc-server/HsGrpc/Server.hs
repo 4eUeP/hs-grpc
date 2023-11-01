@@ -97,6 +97,7 @@ runServer ServerOptions{..} handlers = do
   server <- newAsioServer
               serverHost serverPort serverParallelism
               serverSslOptions
+              serverAuthTokens
               serverChannelArgs
               serverInterceptors
   runAsioGrpc server handlers serverOnStarted serverInternalChannelSize
@@ -110,17 +111,20 @@ newAsioServer
   -> Int    -- ^ port
   -> Int    -- ^ parallelism
   -> Maybe SslServerCredentialsOptions
+  -> [ByteString]  -- ^ auth tokens
   -> [ChannelArg]
   -> [ServerInterceptor]
   -> IO AsioServer
-newAsioServer host port parallelism m_sslOpts chanArgs interceptors = do
+newAsioServer host port parallelism m_sslOpts tokens chanArgs interceptors = do
   ptr <-
     HF.withShortByteString host $ \host' host_len ->
     HF.withMaybePtr m_sslOpts withSslServerCredentialsOptions $ \sslOpts' ->
+    withAuthTokens (basicAuthTokens tokens) $ \authTokens' ->
     withChannelArgs chanArgs $ \chanArgs' chanArgs_size ->
     HF.withPrimList (map toCItcptFact interceptors) $ \intcept' intcept_size ->
       new_asio_server host' host_len port parallelism
                       sslOpts'
+                      authTokens'
                       chanArgs' chanArgs_size
                       intcept' intcept_size
   if ptr == nullPtr then Ex.throwIO $ ServerException "newGrpcServer failed!"

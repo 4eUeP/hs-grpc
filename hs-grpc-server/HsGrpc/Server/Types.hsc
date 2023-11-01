@@ -52,6 +52,11 @@ module HsGrpc.Server.Types
   , pattern GrpcSslRequestAndRequireClientCertificateButDontVerify
   , pattern GrpcSslRequestAndRequireClientCertificateAndVerify
 
+    -- * AuthTokens
+  , AuthTokens
+  , basicAuthTokens
+  , withAuthTokens  -- XXX: this function should be in a Internal module
+
     -- * Interceptors
   , CServerInterceptorFactory
   , ServerInterceptor (..)
@@ -118,6 +123,7 @@ data ServerOptions = ServerOptions
   , serverPort         :: !Int
   , serverParallelism  :: !Int
   , serverSslOptions   :: !(Maybe SslServerCredentialsOptions)
+  , serverAuthTokens   :: ![ByteString]
   , serverOnStarted    :: !(Maybe (IO ()))
   , serverInterceptors :: ![ServerInterceptor]
   , serverChannelArgs  :: ![ChannelArg]
@@ -131,6 +137,7 @@ defaultServerOpts = ServerOptions
   , serverPort = 50051
   , serverParallelism = 0
   , serverSslOptions = Nothing
+  , serverAuthTokens = []
   , serverOnStarted = Nothing
   , serverInterceptors = []
   , serverChannelArgs = []
@@ -419,6 +426,34 @@ newtype GrpcSslClientCertificateRequestType = GrpcSslClientCertificateRequestTyp
   #-}
 
 -------------------------------------------------------------------------------
+-- Auth tokens
+
+newtype AuthTokens = AuthTokens { unAuthTokens :: [ByteString] }
+  deriving (Show, Eq)
+
+-- > bash$ echo -n "user:passwd" | base64
+-- > dXNlcjpwYXNzd2Q=
+--
+-- > basicAuthTokens ["dXNlcjpwYXNzd2Q="]
+basicAuthTokens :: [ByteString] -> AuthTokens
+basicAuthTokens = AuthTokens . map ("Basic " <>)
+
+instance Storable AuthTokens where
+  sizeOf _ = (#size hsgrpc::hs_auth_tokens_t)
+  alignment _ = (#alignment hsgrpc::hs_auth_tokens_t)
+  peek _ptr = error "Unimplemented"
+  poke _ _ = error "Unimplemented, use withAuthTokens instead"
+
+withAuthTokens :: AuthTokens -> (Ptr AuthTokens -> IO a) -> IO a
+withAuthTokens tokens f =
+  allocaBytesAligned (sizeOf tokens) (alignment tokens) $ \ptr ->
+    HF.withByteStringList (unAuthTokens tokens) $ \ds ls l -> do
+      (#poke hsgrpc::hs_auth_tokens_t, datas) ptr ds
+      (#poke hsgrpc::hs_auth_tokens_t, sizes) ptr ls
+      (#poke hsgrpc::hs_auth_tokens_t, len) ptr l
+      f ptr
+
+-------------------------------------------------------------------------------
 -- Status
 
 newtype GrpcError = GrpcError GrpcStatus
@@ -492,8 +527,7 @@ data ChanArgValue
   | ChanArgValueString ShortByteString
   deriving (Show, Eq)
 
-newtype ChannelArg = ChannelArg
-  { unChannelArg :: (ShortByteString, ChanArgValue) }
+newtype ChannelArg = ChannelArg (ShortByteString, ChanArgValue)
   deriving (Eq)
 
 instance Show ChannelArg where
