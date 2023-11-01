@@ -11,6 +11,8 @@ import           HsGrpc.Common.Log
 import           HsGrpc.Server
 import           Proto.AsyncSchedule        as P
 import           Proto.AsyncSchedule_Fields as P
+import           Proto.Msg                  as P
+import           Proto.Msg_Fields           as P
 
 main :: IO ()
 main = do
@@ -21,7 +23,7 @@ main = do
         , serverOnStarted = Just onStarted
         }
   --gprSetLogVerbosity GprLogSeverityDebug
-  runServer opts $ handlers
+  runServer opts handlers
 
 onStarted :: IO ()
 onStarted = putStrLn "Server listening on 0.0.0.0:50051"
@@ -29,9 +31,9 @@ onStarted = putStrLn "Server listening on 0.0.0.0:50051"
 handlers :: [ServiceHandler]
 handlers =
   -- With using 'shortUnary', the test case should not pass.
-  [ unary (GRPC :: GRPC P.Service "slowUnary") handleSlowUnary
-  , unary (GRPC :: GRPC P.Service "depUnary") handleDepUnary
-  , bidiStream (GRPC :: GRPC P.Service "bidiStream") handleBidiStream
+  [ unary (GRPC :: GRPC P.AsyncScheduleService "slowUnary") handleSlowUnary
+  , unary (GRPC :: GRPC P.AsyncScheduleService "depUnary") handleDepUnary
+  , bidiStream (GRPC :: GRPC P.AsyncScheduleService "bidiStream") handleBidiStream
   ]
 
 handleSlowUnary :: UnaryHandler P.Request P.Reply
@@ -43,11 +45,11 @@ handleSlowUnary _ctx _req = do
 
 -- NOTE: not thread-safe
 notifyMVar :: MVar ()
-notifyMVar = unsafePerformIO $ newEmptyMVar
+notifyMVar = unsafePerformIO newEmptyMVar
 {-# NOINLINE notifyMVar #-}
 
 exitedMVar :: MVar ()
-exitedMVar = unsafePerformIO $ newEmptyMVar
+exitedMVar = unsafePerformIO newEmptyMVar
 {-# NOINLINE exitedMVar #-}
 
 handleDepUnary :: UnaryHandler P.Request P.Reply

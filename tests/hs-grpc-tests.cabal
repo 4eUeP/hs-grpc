@@ -1,4 +1,4 @@
-cabal-version:      2.4
+cabal-version:      3.4
 name:               hs-grpc-tests
 version:            0.1.0.0
 synopsis:           Tests for hs-grpc
@@ -19,6 +19,11 @@ custom-setup
     , Cabal             >=2.4  && <4
     , proto-lens-setup  ^>=0.4
 
+-- FIXME: Support to build with template-haskell
+flag hsgrpc_enable_asan
+  default:     False
+  description: Enable AddressSanitizer.
+
 library
   hs-source-dirs:   .
   build-depends:
@@ -28,10 +33,18 @@ library
   exposed-modules:
     Proto.AsyncSchedule
     Proto.AsyncSchedule_Fields
+    Proto.Auth
+    Proto.Auth_Fields
+    Proto.Msg
+    Proto.Msg_Fields
 
   autogen-modules:
+    Proto.Msg
+    Proto.Msg_Fields
     Proto.AsyncSchedule
     Proto.AsyncSchedule_Fields
+    Proto.Auth
+    Proto.Auth_Fields
 
   default-language: GHC2021
 
@@ -52,6 +65,16 @@ common common-exe
     DataKinds
     OverloadedStrings
 
+  -- XXX: Tricky options to link static archive, see: https://github.com/haskell/cabal/issues/4677
+  if (flag(hsgrpc_enable_asan) && os(osx))
+    ghc-options: "-optl-Wl,-lasan"
+
+  if (flag(hsgrpc_enable_asan) && !os(osx))
+    ghc-options:
+      -pgml g++ "-optl-Wl,--allow-multiple-definition"
+      "-optl-Wl,--whole-archive" "-optl-Wl,-Bstatic" "-optl-Wl,-lasan"
+      "-optl-Wl,-Bdynamic" "-optl-Wl,--no-whole-archive"
+
   ghc-options:
     -Wall -Wcompat -Widentities -Wincomplete-record-updates
     -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints
@@ -60,3 +83,7 @@ common common-exe
 executable AsyncSchedule001_server
   import:  common-exe
   main-is: AsyncSchedule001_server.hs
+
+executable test_auth_server
+  import:  common-exe
+  main-is: test_auth_server.hs

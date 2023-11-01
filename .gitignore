@@ -26,4 +26,5 @@ Local*
 *~
 *.swp
 /core
+gen
 gen-*

@@ -5,9 +5,9 @@ import sys
 import timeit
 
 DIR = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
-sys.path.insert(0, os.path.join(DIR, "gen-py"))
+sys.path.insert(0, os.path.join(DIR, "gen/python"))
 
-import AsyncSchedule_pb2 as P
+import msg_pb2 as P
 import AsyncSchedule_pb2_grpc as G
 
 
@@ -48,6 +48,7 @@ async def bidi(stub):
         for _ in range(2):
             req = P.Request(msg="hi")
             yield req
+
     _call = stub.BidiStream(reqs())
     count = 0
     async for r in _call:

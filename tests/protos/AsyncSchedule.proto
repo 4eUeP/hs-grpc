@@ -1,17 +1,10 @@
 syntax = "proto3";
-
 package test;
 
-service Service {
+import "msg.proto";
+
+service AsyncScheduleService {
   rpc SlowUnary(Request) returns (Reply) {}
   rpc DepUnary(Request) returns (Reply) {}
   rpc BidiStream(stream Request) returns (stream Reply) {}
-}
-
-message Request {
-  string msg = 1;
-}
-
-message Reply {
-  string msg = 1;
 }

@@ -1,0 +1,11 @@
+syntax = "proto3";
+package test;
+
+import "msg.proto";
+
+service AuthService {
+  rpc Unary(Request) returns (Reply) {}
+  rpc ClientStream(stream Request) returns (Reply) {}
+  rpc ServerStream(Request) returns (stream Reply) {}
+  rpc BidiStream(stream Request) returns (stream Reply) {}
+}
